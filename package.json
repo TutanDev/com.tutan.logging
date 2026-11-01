@@ -1,0 +1,25 @@
+{
+  "name": "com.tutan.logging",
+  "displayName": "Tutan Logging",
+  "version": "0.1.0",
+  "unity": "6000.1",
+  "unityRelease": "8f1",
+  "description": "A structured log for Unity: events declared once as partial methods, written by a source generator, captured into fixed rings without allocating, and drained once a frame to the Unity Console, with clickable call sites, and to a JSON lines file. An error brings the records that led to it.",
+  "keywords": [
+    "logging",
+    "structured-logging",
+    "source-generator",
+    "zero-allocation",
+    "console"
+  ],
+  "documentationUrl": "https://github.com/TutanDev/com.tutan.logging",
+  "changelogUrl": "https://github.com/TutanDev/com.tutan.logging/blob/main/CHANGELOG.md",
+  "dependencies": {
+    "com.tutan.functional": "1.0.0"
+  },
+  "author": {
+    "name": "TutanDev",
+    "url": "https://github.com/TutanDev/com.tutan.logging",
+    "email": "andrespino.95@gmail.com"
+  }
+}

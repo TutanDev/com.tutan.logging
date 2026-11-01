@@ -1,0 +1,16 @@
+{
+    "name": "Tutan.Logging",
+    "rootNamespace": "Tutan.Logging",
+    "references": [
+        "GUID:24c3fc5ca3568e8459fa78711f324a01"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The source generator that writes, beside every [LogEvent] and [LogScope] declaration of a
+       [LogCategory] class, the extension of Log a program calls, the class's specs, and the method
+       that registers them. Unity loads a generator into its compiler, so it targets netstandard2.0
+       and Microsoft.CodeAnalysis 4.3, the version the Unity 6 manual names. It compiles the
+       package's template parser and name rules from their own files, so a template the generator
+       accepts is one the catalog accepts.
+
+       Build it with build.ps1, which copies the DLL to Runtime/, where Unity applies it to
+       Tutan.Logging and every assembly that references it. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.1" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.4" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\Runtime\TemplateParser.cs" Link="Shared\TemplateParser.cs" />
+    <Compile Include="..\..\Runtime\LogNames.cs" Link="Shared\LogNames.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tutan.Logging.Generators.Tests" />
+  </ItemGroup>
+
+</Project>
