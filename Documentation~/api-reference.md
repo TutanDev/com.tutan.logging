@@ -331,7 +331,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 
 | Member | Description |
 |---|---|
-| `UnityConsoleSink(bool openOnDoubleClick = true, string name = "unity console")` | A sink that writes to Unity's Console |
+| `UnityConsoleSink(bool openOnDoubleClick = true, string name = "unity console", bool callSiteLine = true)` | A sink that writes to Unity's Console; `callSiteLine: false` leaves out the second line, the call site and frame |
 | `static LogType TypeOf(LogLevel level)` | The row type of a level |
 
 ### `JsonLinesSink` (`ILogSink`, `IDisposable`)

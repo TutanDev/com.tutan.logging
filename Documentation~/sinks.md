@@ -72,22 +72,23 @@ A file that leaves the player's machine redacts what a developer's Console does 
 ## Unity Console
 
 ```csharp
-new UnityConsoleSink(openOnDoubleClick: true, name: "unity console")
+new UnityConsoleSink(openOnDoubleClick: true, name: "unity console", callSiteLine: true)
 ```
 
 Writes each record as one Console row, and in a player as one line of the player log:
 
 ```
-game.save  Saved slot 3 in 00:00:01.2000000  < Saving slot 3
+[game.save] Saved slot 3 in 00:00:01.2000000  < Saving slot 3
 SaveManager.cs:42  frame 1240
 ```
 
-- The first line is the category and the message, then `  (+N)` when a limit dropped N records of the event before it, then `  < ` and the opening of the scope it is under.
+- The first line is the category in brackets and the message, then `  (+N)` when a limit dropped N records of the event before it, then `  < ` and the opening of the scope it is under.
 - A scope's closing reads `Saving slot 3: done in 12.5 ms`.
 - A record written as an error's context starts with `(context) `.
 - An exception follows its record whole, on the lines after it.
 - The second line is the call site, which in the editor is a link, `<a href="Assets/Game/SaveManager.cs" line="42">`, that opens the file at the line; then the frame, when the store had one.
   In a player it reads `(at Assets/Game/SaveManager.cs:42)`.
+  With `callSiteLine: false` a row is its first line alone, and in the editor, with `openOnDoubleClick`, a double-click still opens the call site.
 - Levels map to row types: `Warning` is a warning, `Error` and `Critical` are errors, and the rest are logs (`UnityConsoleSink.TypeOf`).
 - Records overwritten before the drain read them are a warning row, `1,234 records were overwritten before the Console read them`.
 

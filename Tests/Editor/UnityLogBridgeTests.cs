@@ -63,7 +63,7 @@ namespace Tutan.Logging.Tests
         {
             var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
             var memory = new MemorySink();
-            LogAssert.Expect(LogType.Log, new Regex("^tests\\.save  Saved slot 1 as a\\.sav"));
+            LogAssert.Expect(LogType.Log, new Regex("^\\[tests\\.save\\] Saved slot 1 as a\\.sav"));
 
             using (var drain = new LogDrain(store, (new UnityConsoleSink(openOnDoubleClick: false), new LogSinkOptions(LogLevel.Trace)), (memory, new LogSinkOptions(LogLevel.Trace))))
             using (UnityLogBridge.Attach(store.Log))

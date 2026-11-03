@@ -34,8 +34,9 @@ First version: a structured log for Unity, ported from the design of FunctionalR
 - **`LogDrain` and `ILogSink`:** the drain reads the store when pumped and hands records to its sinks in sequence order.
   `LogSinkOptions` sets each sink's least level, its backlog (the latest records below that level sharing an error's scope, written before the error as context) and its redaction (`Personal`, `HomeFolder`).
   A sink that throws is reported once and not written to again.
-- **`UnityConsoleSink`:** one Console row per record with the category, message, rate-limit count, enclosing scope, frame, and a hyperlink to the call site mapped to the path Unity opens.
+- **`UnityConsoleSink`:** one Console row per record with the category in brackets, message, rate-limit count, enclosing scope, frame, and a hyperlink to the call site mapped to the path Unity opens.
   Rows are written without a stack trace.
+  `callSiteLine: false` leaves out the second line, the call site and frame.
   In the editor a row also opens its call site on double-click through an internal Unity method, falling back to the link when that is missing.
 - **`JsonLinesSink` and `LogFile`:** a self-describing JSON lines format (a header, a declaration before the first record of each event, then records), written without allocating once its buffers have grown.
   `LogFile.Session` opens a file per session under `Application.persistentDataPath/Logs` and keeps the latest ten.

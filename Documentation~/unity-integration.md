@@ -84,6 +84,7 @@ In the editor, a row written with `openOnDoubleClick` (the default) also opens t
 Unity has no public way to say where a row opens, so this binds the internal `Debug.LogInfo`, `LogWarning` and `LogError` overloads that take a file and a line.
 It is kept apart from the sink, and Editor-only, so that a Unity upgrade that renames or removes them costs only the double-click: the sink falls back to rows with the link, for good, the first time binding or a call fails.
 `new UnityConsoleSink(openOnDoubleClick: false)` writes every row with the public API.
+`new UnityConsoleSink(callSiteLine: false)` leaves the link line out of every row, leaving the double-click as the way to the call site.
 
 ## Registration
 

@@ -7,13 +7,13 @@ namespace Tutan.Logging
     /// <summary>
     /// Writes records to Unity's Console, and in a player to its log file, as one row each:
     /// <code>
-    /// game.save  Saved slot 3 in 00:00:01.2000000  &lt; Saving slot 3
+    /// [game.save] Saved slot 3 in 00:00:01.2000000  &lt; Saving slot 3
     /// SaveManager.cs:42  frame 1240
     /// </code>
-    /// The category and the message, how many a limit dropped before it, what it is under, and on the
-    /// second line the call site, which in the editor is a link that opens it. A record written as an
-    /// error's context starts with <c>(context)</c>, an exception follows its record whole, and a
-    /// scope's closing says how long it was open.
+    /// The category in brackets and the message, how many a limit dropped before it, what it is under,
+    /// and on the second line, unless the sink leaves it out, the call site, which in the editor is a
+    /// link that opens it. A record written as an error's context starts with <c>(context)</c>, an
+    /// exception follows its record whole, and a scope's closing says how long it was open.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -32,6 +32,7 @@ namespace Tutan.Logging
     public sealed class UnityConsoleSink : ILogSink
     {
         private readonly bool _openOnDoubleClick;
+        private readonly bool _callSiteLine;
         private readonly object[] _args = new object[1];
         private char[] _chars = new char[512];
         private UnityPaths? _paths;
@@ -46,9 +47,15 @@ namespace Tutan.Logging
         /// link in the message.
         /// </param>
         /// <param name="name">What the log calls the sink.</param>
-        public UnityConsoleSink(bool openOnDoubleClick = true, string name = "unity console")
+        /// <param name="callSiteLine">
+        /// Whether a row ends with a second line naming its call site and frame; false keeps a row to
+        /// its first line, and, with <paramref name="openOnDoubleClick"/>, a double-click in the editor
+        /// still opens the call site.
+        /// </param>
+        public UnityConsoleSink(bool openOnDoubleClick = true, string name = "unity console", bool callSiteLine = true)
         {
             _openOnDoubleClick = openOnDoubleClick;
+            _callSiteLine = callSiteLine;
             Name = name;
         }
 
@@ -91,17 +98,14 @@ namespace Tutan.Logging
             }
 
             string file = _paths!.Map(site.File!);
-            string line = site.Line.ToString(CultureInfo.InvariantCulture);
-            string frame = record.Frame != 0 ? "  frame " + record.Frame.ToString(CultureInfo.InvariantCulture) : "";
+            if (_callSiteLine)
+                row += CallSiteLine(file, site.Line, record.Frame);
 #if UNITY_EDITOR
-            row += $"\n<a href=\"{file}\" line=\"{line}\">{UnityPaths.FileName(file)}:{line}</a>{frame}";
             using (UnityConsoleEcho.Mark())
             {
                 if (_rows is not null && _rows.TryWrite(type, row, file, site.Line))
                     return;
             }
-#else
-            row += $"\n(at {file}:{line}){frame}";
 #endif
             Send(type, row);
         }
@@ -122,6 +126,18 @@ namespace Tutan.Logging
             LogLevel.Error or LogLevel.Critical => LogType.Error,
             _ => LogType.Log,
         };
+
+        /// <summary>The row's second line: the call site, in the editor a link that opens it, then the frame, when the store had one.</summary>
+        private static string CallSiteLine(string file, int line, long frame)
+        {
+            string at = line.ToString(CultureInfo.InvariantCulture);
+            string stamp = frame != 0 ? "  frame " + frame.ToString(CultureInfo.InvariantCulture) : "";
+#if UNITY_EDITOR
+            return $"\n<a href=\"{file}\" line=\"{at}\">{UnityPaths.FileName(file)}:{at}</a>{stamp}";
+#else
+            return $"\n(at {file}:{at}){stamp}";
+#endif
+        }
 
         private void Send(LogType type, string row)
         {
@@ -149,7 +165,9 @@ namespace Tutan.Logging
             written = 0;
             if (backlog && !LogText.Append("(context) ", row, ref written))
                 return false;
-            if (!LogText.Append(record.Event.Category, row, ref written) || !LogText.Append("  ", row, ref written))
+            if (!LogText.Append("[", row, ref written)
+                || !LogText.Append(record.Event.Category, row, ref written)
+                || !LogText.Append("] ", row, ref written))
                 return false;
             if (!context.TryFormat(record, row.Slice(written), out int message))
                 return false;
