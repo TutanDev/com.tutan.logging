@@ -101,7 +101,7 @@ namespace Tutan.Logging.Tests
             registry.Register(new[] { Spec("tests.shared", "A", s_here) });
             registry.Register(new[] { Spec("tests.shared", "B", s_there), Spec("tests.shared", "C", s_there) });
 
-            Assert.That(registry.Conflicts, Has.Length.EqualTo(1));
+            Assert.That(registry.Conflicts, Has.Count.EqualTo(1));
             Assert.That(registry.Conflicts[0], Is.EqualTo(new LogCatalogConflict.CategoryTwice("tests.shared", s_here, s_there)));
         }
 
@@ -117,6 +117,45 @@ namespace Tutan.Logging.Tests
 
             Assert.That(registry.Find("tests.again/Saved").ValueUnsafe(), Is.SameAs(after));
             Assert.That(registry.Conflicts, Is.Empty);
+        }
+
+        [Test]
+        public void A_registration_with_a_null_spec_registers_none_of_them()
+        {
+            var registry = new LogRegistry();
+            LogEventSpec first = Spec("tests.whole", "Saved", s_here);
+
+            Assert.That(() => registry.Register(new[] { first, null! }), Throws.ArgumentNullException.With.Message.Contains("The spec at 1 is null"));
+            Assert.That(first.Index, Is.EqualTo(-1));
+            Assert.That(registry.EventArray, Is.Empty);
+            Assert.That(registry.Find("tests.whole/Saved").IsNone, Is.True);
+        }
+
+        [Test]
+        public void A_registration_with_an_event_a_file_declares_registers_none_of_them()
+        {
+            var registry = new LogRegistry();
+            LogEventSpec first = Spec("tests.whole", "Saved", s_here);
+            LogEventSpec read = LogEventSpec.OfFile("tests.whole", "Read", LogEventKind.Event, F.Some(LogLevel.Information), "Read",
+                Array.Empty<LogField>(), 0, s_here).ValueUnsafe();
+
+            Assert.That(() => registry.Register(new[] { first, read }),
+                Throws.ArgumentException.With.Message.Contains("tests.whole/Read was read back from a file"));
+            Assert.That((first.Index, read.Index), Is.EqualTo((-1, -1)));
+            Assert.That(registry.EventArray, Is.Empty);
+        }
+
+        [Test]
+        public void A_spec_given_twice_in_one_registration_is_registered_once()
+        {
+            var registry = new LogRegistry();
+            LogEventSpec first = Spec("tests.twice", "Saved", s_here);
+            LogEventSpec second = Spec("tests.twice", "Loaded", s_here);
+
+            registry.Register(new[] { first, second, first });
+
+            Assert.That(registry.EventArray, Is.EqualTo(new[] { first, second }));
+            Assert.That((first.Index, second.Index), Is.EqualTo((0, 1)));
         }
 
         [TestCase("Tests.Bad", "Saved", "not a category")]

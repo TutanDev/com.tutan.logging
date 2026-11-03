@@ -47,15 +47,16 @@ namespace Tutan.Logging
     {
         private readonly ScopeTable _scopes;
 
-        internal LogContext(LogStore store, LogSinkOptions options, ScopeTable scopes)
+        internal LogContext(LogRecords records, LogSinkOptions options, ScopeTable scopes)
         {
-            Clock = store.Clock;
-            Program = store.Program;
+            Clock = records.Clock;
+            Program = records.Program;
             Options = options;
+            Redact = options.Redact | records.Redacted;
             _scopes = scopes;
         }
 
-        /// <summary>The clock of the records' store.</summary>
+        /// <summary>The clock of the records' store, or of the session they were read back from.</summary>
         public LogClock Clock { get; }
 
         /// <summary>The program that wrote the records.</summary>
@@ -64,8 +65,11 @@ namespace Tutan.Logging
         /// <summary>The sink's options.</summary>
         public LogSinkOptions Options { get; }
 
-        /// <summary>What the sink leaves out.</summary>
-        public LogRedaction Redact => Options.Redact;
+        /// <summary>
+        /// What the sink leaves out: what its options say, and what the records it writes already lack,
+        /// as a file read back with its personal fields left out does, so what it writes says so too.
+        /// </summary>
+        public LogRedaction Redact { get; }
 
         /// <summary>
         /// The record that opened <paramref name="scope"/>, if the drain read it and the scope has not

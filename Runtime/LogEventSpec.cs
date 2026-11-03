@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading;
 using Tutan.Functional;
 
 namespace Tutan.Logging
@@ -9,16 +10,19 @@ namespace Tutan.Logging
     /// Everything a program knows about one event or scope before it is ever written: its key, level,
     /// template and fields, and where it is declared. A spec is immutable, made once by the code the
     /// generator writes, and registered in <see cref="LogCatalog"/> when its assembly loads. A record
-    /// stores only the spec's index, and a reader goes back to the spec for the rest.
+    /// stores only the spec's index, and a reader goes back to the spec for the rest. A file read back
+    /// declares specs of its own, which are its archive's alone: the catalog never holds one, and a
+    /// store never writes one.
     /// </summary>
     public sealed class LogEventSpec
     {
         private readonly LogField[] _fields;
         private int _index = -1;
 
-        private LogEventSpec(string category, string name, LogEventKind kind, Optional<LogLevel> level, LogTemplate template,
-            LogField[] fields, int perSecond, LogSource source)
+        private LogEventSpec(LogSpecOrigin origin, string category, string name, LogEventKind kind, Optional<LogLevel> level,
+            LogTemplate template, LogField[] fields, int perSecond, LogSource source)
         {
+            Origin = origin;
             Category = category;
             Name = name;
             Key = category + "/" + name;
@@ -26,6 +30,7 @@ namespace Tutan.Logging
             Level = level;
             Template = template;
             _fields = fields;
+            Fields = Array.AsReadOnly(fields);
             PerSecond = perSecond;
             Source = source;
 
@@ -63,7 +68,7 @@ namespace Tutan.Logging
         public LogTemplate Template { get; }
 
         /// <summary>The fields, in the order the call writes them.</summary>
-        public IReadOnlyList<LogField> Fields => _fields;
+        public IReadOnlyList<LogField> Fields { get; }
 
         /// <summary>The limit it declares, in records a second, or 0 for none. A rule overrides it.</summary>
         public int PerSecond { get; }
@@ -73,10 +78,13 @@ namespace Tutan.Logging
 
         /// <summary>
         /// Its place in <see cref="LogCatalog"/>, which is what a record stores: -1 until it is
-        /// registered. It is dense and fixed for the process, and different in the next one, so it is
-        /// never written out.
+        /// registered, and always for a file's. It is dense and fixed for the process, and different in
+        /// the next one, so it is never written out.
         /// </summary>
-        public int Index => _index;
+        public int Index => Volatile.Read(ref _index);
+
+        /// <summary>Who declared it: this program, whose specs the catalog holds, or a file read back.</summary>
+        internal LogSpecOrigin Origin { get; }
 
         /// <summary>The fields, for the readers that walk them on every record.</summary>
         internal LogField[] FieldArray => _fields;
@@ -89,7 +97,8 @@ namespace Tutan.Logging
 
         internal byte Gate { get; }
 
-        internal void Register(int index) => _index = index;
+        // After the catalog published the specs that hold it, and seen by writers that read no lock.
+        internal void Register(int index) => Volatile.Write(ref _index, index);
 
         /// <summary>
         /// A spec the generator declares, checked: every argument is held to what the generator
@@ -125,12 +134,28 @@ namespace Tutan.Logging
                 throw new ArgumentNullException(nameof(source));
 
             Optional<LogLevel> optional = level.HasValue ? F.Some(level.Value) : F.None;
-            string? why = Check(category, name, kind, optional, fields, perSecond);
-            LogTemplate? made = why is null ? LogTemplate.Create(template, fields, out why) : null;
-            if (made is null)
-                throw new ArgumentException($"{category}/{name} is not an event: {why}.");
+            return Make(LogSpecOrigin.Program, category, name, kind, optional, template, fields, perSecond, source).Match(
+                error => throw new ArgumentException($"{category}/{name} is not an event: {error.Message}."),
+                spec => spec);
+        }
 
-            return new LogEventSpec(category, name, kind, optional, made, (LogField[])fields.Clone(), perSecond, source);
+        /// <summary>
+        /// A spec a file declares, held to what <see cref="Declare"/> holds one to, or, as the end of a
+        /// sentence, why it is not an event: for a reader of a file, whose declarations no compiler
+        /// checked. It is the file's own, so the catalog never holds it and a store never writes it.
+        /// </summary>
+        internal static Result<LogEventSpec> OfFile(string category, string name, LogEventKind kind, Optional<LogLevel> level,
+            string template, LogField[] fields, int perSecond, LogSource source) =>
+            Make(LogSpecOrigin.File, category, name, kind, level, template, fields, perSecond, source);
+
+        private static Result<LogEventSpec> Make(LogSpecOrigin origin, string category, string name, LogEventKind kind,
+            Optional<LogLevel> level, string template, LogField[] fields, int perSecond, LogSource source)
+        {
+            if (Check(category, name, kind, level, fields, perSecond) is { } wrong)
+                return F.Error(wrong);
+
+            return LogTemplate.Create(template, fields).Map(made =>
+                new LogEventSpec(origin, category, name, kind, level, made, (LogField[])fields.Clone(), perSecond, source));
         }
 
         /// <summary>The key.</summary>
@@ -195,6 +220,8 @@ namespace Tutan.Logging
             Text = text;
             _literals = literals;
             _holes = holes;
+            Literals = Array.AsReadOnly(literals);
+            Holes = Array.AsReadOnly(holes);
 
             // Backwards, so the first hole that names a field is the one whose format it keeps.
             _formats = new string?[fields];
@@ -206,10 +233,10 @@ namespace Tutan.Logging
         public string Text { get; }
 
         /// <summary>The text around the holes, with <c>{{</c> and <c>}}</c> made single.</summary>
-        public IReadOnlyList<string> Literals => _literals;
+        public IReadOnlyList<string> Literals { get; }
 
         /// <summary>The holes, in the order they appear.</summary>
-        public IReadOnlyList<LogHole> Holes => _holes;
+        public IReadOnlyList<LogHole> Holes { get; }
 
         internal string[] LiteralArray => _literals;
 
@@ -221,15 +248,12 @@ namespace Tutan.Logging
         /// <summary>The template as it was declared.</summary>
         public override string ToString() => Text;
 
-        /// <summary><paramref name="text"/> taken apart, each hole matched to the field of its name, ignoring case, or null with why it cannot be.</summary>
-        internal static LogTemplate? Create(string text, LogField[] fields, out string? why)
+        /// <summary><paramref name="text"/> taken apart, each hole matched to the field of its name, ignoring case, or why it cannot be, as the end of a sentence.</summary>
+        internal static Result<LogTemplate> Create(string text, LogField[] fields)
         {
             ParsedTemplate? parsed = TemplateParser.Parse(text, out string? error);
             if (parsed is null)
-            {
-                why = "its template does not parse: " + error;
-                return null;
-            }
+                return F.Error("its template does not parse: " + error);
 
             var holes = new LogHole[parsed.Holes.Length];
             for (int h = 0; h < holes.Length; h++)
@@ -243,15 +267,11 @@ namespace Tutan.Logging
                 }
 
                 if (field < 0)
-                {
-                    why = $"its template has a hole {{{hole.Name}}}, and it has no field of that name";
-                    return null;
-                }
+                    return F.Error($"its template has a hole {{{hole.Name}}}, and it has no field of that name");
 
                 holes[h] = new LogHole(field, hole.Alignment, hole.Format.Length == 0 ? null : hole.Format);
             }
 
-            why = null;
             return new LogTemplate(text, parsed.Literals, holes, fields.Length);
         }
     }
@@ -261,4 +281,14 @@ namespace Tutan.Logging
     /// <param name="Alignment">The width it pads to: on the left when positive, on the right when negative, none when 0.</param>
     /// <param name="Format">What follows its colon, handed to the value's formatting, or null.</param>
     public readonly record struct LogHole(int Field, int Alignment, string? Format);
+
+    /// <summary>Who declared a spec: the program running, or a file a reader read back.</summary>
+    internal enum LogSpecOrigin : byte
+    {
+        /// <summary>This program's code declared it, and the catalog holds it once registered.</summary>
+        Program,
+
+        /// <summary>A file declared it, and only the archive read from that file holds it.</summary>
+        File,
+    }
 }

@@ -51,6 +51,25 @@ namespace Tutan.Logging.Tests
         public void Advance(TimeSpan by) => Now += (long)(by.TotalSeconds * Stopwatch.Frequency);
     }
 
+    /// <summary>Stores the reading tests write to and read back, which keep every record.</summary>
+    internal static class Stores
+    {
+        /// <summary>The smallest store there is, which overwrites its records after sixteen.</summary>
+        public static readonly LogStoreOptions Tiny = new LogStoreOptions(LogStore.MinRecords, LogStore.MinBits, LogStore.MinRefs, "Tests");
+
+        /// <summary>A store that keeps every level, on <paramref name="clock"/> when one is given.</summary>
+        public static LogStore Everything(LogStoreOptions? options = null, TestClock? clock = null) =>
+            new LogStore(LogRules.Parse("trace").ValueUnsafe(), options ?? new LogStoreOptions(Program: "Tests"), clock is null ? (Func<long>?)null : clock.Read);
+
+        /// <summary>Runs <paramref name="write"/> on a thread of its own, and waits for it.</summary>
+        public static void OnAnotherThread(Action write)
+        {
+            var thread = new System.Threading.Thread(() => write());
+            thread.Start();
+            thread.Join();
+        }
+    }
+
     internal static class MemoryRecords
     {
         /// <summary>The records of <paramref name="spec"/>: what a test asserts on, whatever else a store said.</summary>

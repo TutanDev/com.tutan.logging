@@ -28,6 +28,35 @@ namespace Tutan.Logging
             return false;
         }
 
+        /// <summary>
+        /// The name of the type <paramref name="exception"/> was thrown as: its full name, as a file
+        /// writes it, or its name, as a message does. An exception read back from a file is named as
+        /// the program that threw it named it, not as an <see cref="ArchivedException"/>.
+        /// </summary>
+        public static string TypeName(Exception exception, bool full)
+        {
+            if (exception is ArchivedException archived)
+                return full ? archived.TypeName : ShortName(archived.TypeName);
+
+            Type type = exception.GetType();
+            return full ? type.FullName ?? type.Name : type.Name;
+        }
+
+        /// <summary>
+        /// A full name's last part, as <see cref="Type.Name"/> has it: what follows the last <c>.</c>
+        /// or <c>+</c> before a generic type's arguments.
+        /// </summary>
+        private static string ShortName(string fullName)
+        {
+            int arguments = fullName.IndexOf('[');
+            int end = arguments < 0 ? fullName.Length : arguments;
+            int start = end;
+            while (start > 0 && fullName[start - 1] is not ('.' or '+'))
+                start--;
+
+            return fullName.Substring(start, end - start);
+        }
+
         /// <summary>Appends <paramref name="text"/> at <paramref name="written"/>, which moves past it, or leaves both alone when it does not fit.</summary>
         public static bool Append(ReadOnlySpan<char> text, Span<char> destination, ref int written)
         {

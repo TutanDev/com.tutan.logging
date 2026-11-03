@@ -60,12 +60,14 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `static Log Discard` | A log that captures nothing |
 | `bool IsHanded` | Whether it was handed a store; false for `default` |
 | `long Scope` | The scope it writes under, or 0 |
-| `bool IsEnabled(LogEventSpec spec)` | Whether the event is on at its own level |
+| `bool IsEnabled(LogEventSpec spec)` | Whether the event is on at its own level; never for an event a file declares |
 | `bool IsEnabled(LogEventSpec spec, LogLevel level)` | Whether the event is on at a level chosen at the call |
 | `LogWriter Write(LogEventSpec, LogLevel, int chars, string callerFile, int callerLine)` | *Generator:* reserves an event's record |
 | `LogWriter BeginScope(LogEventSpec, LogLevel, int chars, string callerFile, int callerLine)` | *Generator:* reserves a scope's opening |
 | `Equals`, `==`, `!=`, `GetHashCode` | Equal when both are handles to one store and one scope |
 | `ToString()` | The store's program and the scope, for a debugger |
+
+`Write` and `BeginScope` throw for an event of the other kind, a level other than the event's own or past `Critical`, and an event a file declares.
 
 ### `LogScope` (readonly struct, `IDisposable`)
 
@@ -87,7 +89,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 
 ## The store
 
-### `LogStore`
+### `LogStore` (`LogRecords`)
 
 | Member | Description |
 |---|---|
@@ -101,6 +103,10 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `long Frame` | The frame records written now are stamped with |
 | `long First` | The oldest sequence it still holds |
 | `long Next` | The sequence the next record gets |
+| `IReadOnlyList<LogEventSpec> Events` | The catalog's events |
+| `LogRedaction Redacted` | `None`: a store's records lack nothing |
+| `LogLateMark LateMark` | `default`: a store holds its records in the order they were written |
+| `LogLate LateFrom(LogLateMark seen)` | `Next`, with the `default` mark |
 | `void Apply(LogRules rules)` | Captures what the rules say from now on, from any thread |
 | `void EnterFrame(long frame)` | Stamps records written from now on with the frame |
 | `LogRead Read(long from, LogBatch into)` | Copies the records from a sequence on, as many as fit |
@@ -174,6 +180,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `LogLevel Level` | Its level |
 | `LogRecordKind Kind` | An event, or a scope's opening or closing |
 | `int Suppressed` | How many records of its event a limit dropped before it |
+| `bool IsBacklog` | Whether a sink was handed it as an error's backlog; never for a store's |
 | `LogCallSite CallSite` | The call that wrote it |
 | `LogEventSpec Event` | Its event or scope |
 | `int FieldCount` | How many fields it has |
@@ -230,7 +237,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `IReadOnlyList<LogField> Fields` | The fields, in the order the call writes them |
 | `int PerSecond` | The limit it declares, or 0 |
 | `LogSource Source` | Where it is declared |
-| `int Index` | Its place in the catalog, which is what a record stores |
+| `int Index` | Its place in the catalog, which is what a record stores: -1 until it is registered, and always for an event a file declares |
 | `static LogEventSpec Declare(...)` | *Generator:* a spec, checked |
 | `ToString()` | The key |
 
@@ -274,7 +281,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `int Count` | How many are registered |
 | `IReadOnlyList<LogCatalogConflict> Conflicts` | What two assemblies declared alike |
 | `Optional<LogEventSpec> Find(string key)` | The spec with a key, the first registered |
-| `void Register(params LogEventSpec[] specs)` | *Generator:* registers specs, idempotently |
+| `void Register(params LogEventSpec[] specs)` | *Generator:* registers specs, idempotently, and all or none: it throws for a null spec or an event a file declares before it registers any |
 
 ### `LogCatalogConflict` (abstract record)
 
@@ -320,7 +327,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `LogClock Clock` | The store's clock |
 | `string Program` | The program's name |
 | `LogSinkOptions Options` | The sink's options |
-| `LogRedaction Redact` | What the sink leaves out |
+| `LogRedaction Redact` | What the sink leaves out: its options' and what the records already lack |
 | `bool TryScope(long scope, out LogRecord begin)` | The record that opened a scope still open |
 | `bool TryFormat(LogRecord record, Span<char> destination, out int written)` | A record's message with the sink's redaction |
 | `string Text(LogRecord record)` | The same, as a string |
@@ -349,10 +356,45 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `const string Extension` | `.jsonl` |
 | `static Result<JsonLinesSink> Session(LogStore store, int keep = 10)` | A file for this session in `Application.persistentDataPath/Logs` |
 | `static Result<JsonLinesSink> Session(LogStore store, string folder, int keep = 10)` | A file for this session in a folder, keeping the program's latest `keep` |
+| `static Result<LogSessionFile> Read(string path)` | The log a `JsonLinesSink` wrote to a file, as far as it goes; fails with a `LogFileReadError` code |
+| `static Result<LogSessionFile> Read(Stream stream, string name)` | The same, from a stream, which it leaves open; `name` is what the errors call it |
 
 ### `LogFileError`
 
 `NoFolder`, `NoFile`: the `Error.Code` of a failed `Session`.
+
+### `LogSessionFile`
+
+| Member | Description |
+|---|---|
+| `string Path` | What it was read from |
+| `LogArchive Archive` | Its records; `Capacity` is their count |
+| `IReadOnlyList<LogSkippedLine> Skipped` | The lines it could not read, in the order of the file |
+
+### `LogFileReadError`
+
+`Unreadable`, `NotALog`, `UnknownFormat`: the `Error.Code` of a failed `Read`.
+A first line past 64K characters is `NotALog`, as no header is that long.
+
+### `LogSkippedLine` (record)
+
+`LogSkippedLine(int Line, LogSkipReason Reason)`: a line's number, from 1, and why it was skipped.
+`ToString()` says it as a sentence.
+
+### `LogSkipReason` (abstract record)
+
+| Case | The line |
+|---|---|
+| `NotJson` | Is not JSON |
+| `NotALine` | Is JSON, but not a record, a declaration or a loss |
+| `Undeclared(string Key, long Id)` | Is a record of an event the file does not declare before it |
+| `NotADeclaration(string Key, string Why)` | Declares an event as the format does not write a declaration |
+| `NotAnEvent(string Key, string Why)` | Declares what is not an event |
+| `DeclaredTwice(string Key, long Id)` | Declares an event a line before it declares |
+| `NotItsDeclaration(string Key, string Why)` | Is a record not as its declaration says |
+| `NotAStamp(string Stamp)` | Is a record with a stamp no record can have |
+| `SequenceTwice(long Sequence)` | Is a second record of a sequence |
+| `LostAtEnd(long Count)` | Says records were lost after the last record |
 
 ### `MemoryLog` (`IDisposable`)
 
@@ -381,6 +423,143 @@ Marks a parameter whose field can name a person, which a sink can redact.
 ### `MemoryField` (record)
 
 `MemoryField(string Name, object? Value, string Text)`: a field's name, its value boxed, and its value formatted.
+
+## Reading
+
+### `LogRecords` (abstract)
+
+A `LogStore` or a `LogArchive`, and nothing else.
+
+| Member | Description |
+|---|---|
+| `string Program` | The program that wrote the records |
+| `LogClock Clock` | When its store started |
+| `IReadOnlyList<LogEventSpec> Events` | The events its records are of |
+| `int Capacity` | The most records it holds |
+| `long First` | The oldest sequence it holds |
+| `long Next` | One past the newest |
+| `LogRedaction Redacted` | What the records lack, as the sink that wrote them left it out |
+| `LogLateMark LateMark` | Where it is in placing records it was handed after a later one |
+| `LogLate LateFrom(LogLateMark seen)` | Where to read again from to see the records placed late since the mark `seen`, with the mark to pass next time, read in one step |
+| `LogRead Read(long from, LogBatch into)` | Copies the records from a sequence on, as many as fit |
+| `int Read(ReadOnlySpan<long> sequences, LogBatch into)` | Copies the records of the given sequences it holds |
+
+### `LogArchive` (`LogRecords`)
+
+A session's records, held after the store that wrote them has moved on.
+`LogFile.Read` makes one from a file.
+
+| Member | Description |
+|---|---|
+| `int Count` | How many records it holds |
+| `long Dropped` | How many of its oldest it let go to stay under its cap |
+
+A file's archive holds what the file held, and takes nothing after.
+
+### `LogLateMark` (readonly record struct)
+
+Opaque: what `LateMark` and `LateFrom` hand a reader, to pass back to `LateFrom` next time.
+It is of the records that made it: `default`, or a mark of other records, has seen none of these.
+
+### `LogLate` (readonly record struct)
+
+| Member | Description |
+|---|---|
+| `long From` | The least sequence placed late since the mark: `Next` when none was, `First` when more were than the records remember |
+| `LogLateMark Mark` | The mark to pass to `LateFrom` next time, taken with `From` |
+
+### `ArchivedException` (`Exception`)
+
+| Member | Description |
+|---|---|
+| `ArchivedException(string typeName, string message, string text)` | An exception read back from a file |
+| `string TypeName` | The full name it was thrown as |
+| `ToString()` | The text the file holds, stack trace and all |
+
+### `LogView`
+
+| Member | Description |
+|---|---|
+| `LogView(LogRecords source, LogFilter filter)` | A view of the records the filter keeps, which the first `Update` reads |
+| `LogRecords Source` | The records it reads |
+| `LogScopes Scopes` | The scopes it has read |
+| `LogFilter Filter` | Which records it is to show; setting one not equal to it scans again, and an equal one does nothing |
+| `LogFilter Shown` | The filter the rows were made with: `Filter`, but while a scan is under way |
+| `IReadOnlyList<LogFilterTerm> GaveUp` | The terms of `Shown` whose regular expression took too long over a record, in the filter's order, which match nothing in the rows from that record on |
+| `bool IsScanning` | Whether a scan for a new filter or fold is under way |
+| `int Count` | How many rows it has |
+| `LogRow this[int row]` | A row, from 0, the oldest |
+| `LogLevelCounts Counts` | How many records match, by level, everything the filter keeps but for its levels |
+| `long Lost` | How many records were lost before it read them |
+| `void Update()` | Reads what arrived since it last did, or goes on with a scan; once a frame |
+| `void Retry()` | Scans again when a regular expression of `Filter` took too long, to try it afresh; nothing when none did |
+| `void Clear()` | Starts it at the newest record |
+| `void Fold(long scope)`, `void Unfold(long scope)` | Hides or shows what is under a scope; scans again |
+| `bool IsFolded(long scope)` | Whether the rows hide what is under a scope |
+| `Optional<int> Find(long sequence)` | The row that holds a record, or the repeat that spans it |
+| `int Read(int row, int count, LogBatch into)` | Copies the records of rows, one a row |
+| `void Write(ILogSink sink, int row, int count, LogSinkOptions? options = null)` | Writes every record the rows stand for to a sink not yet opened, as a drain would |
+
+### `LogRow` (readonly record struct)
+
+`LogRow(long Sequence, long Last, int Records, long Suppressed, LogLevel Level, LogRowKind Kind, int Depth, long LostBefore)`: the first and last record's sequences, how many records it stands for, what a limit dropped among them, their level, what kind of row it is, how many scopes with rows it is under, and how many records were lost just before it.
+
+### `LogRowKind`
+
+`Event`, `Scope`.
+
+### `LogLevelCounts` (readonly record struct)
+
+`LogLevelCounts(long Trace, long Debug, long Information, long Warning, long Error, long Critical)`, with `this[LogLevel level]` and `Total`.
+
+### `LogScopes`
+
+| Member | Description |
+|---|---|
+| `int Count` | How many scopes it knows |
+| `bool IsUnder(long scope, long ancestor)` | Whether a scope is the ancestor or under it |
+| `long Parent(long scope)` | The scope it was opened under, or 0 |
+| `bool IsOpen(long scope)` | Whether it is known and its closing has not been read |
+| `Optional<TimeSpan> Elapsed(long scope)` | How long it was open, once closed |
+
+### `LogFilter` (record)
+
+| Member | Description |
+|---|---|
+| `LogFilter(LogLevelRange levels, LogFrameRange frames, IReadOnlyList<LogFilterTerm> keep, IReadOnlyList<LogFilterTerm> leaveOut)` | A filter of its parts; the lists are copied |
+| `static LogFilter All` | Keeps every record |
+| `LogLevelRange Levels`, `LogFrameRange Frames` | The levels and frames kept |
+| `IReadOnlyList<LogFilterTerm> Keep`, `LeaveOut` | The terms a record must meet, and must not |
+| `static Result<LogFilter> Parse(string query)` | Reads a query; fails with a `LogFilterError` code and the word |
+| `bool Matches(LogRecord record, LogScopes scopes)` | Whether a record is kept; a regular expression that takes too long over it does not match it |
+| `IReadOnlyList<LogFilterTerm> MatchingNothing(IReadOnlyList<LogEventSpec> events)` | The events and fields it names that none of the events is or has |
+| `ToString()` | The query that reads back as it |
+
+Two filters are equal when their levels, frames and terms, in order, are.
+
+### `LogFilterTerm` (abstract record)
+
+| Case | Matches |
+|---|---|
+| `Event(string Pattern)` | Records of the events a pattern names, as a rule names them |
+| `Scope(long Id)` | A scope's records, and every record under it |
+| `Thread(int Id)` | What one managed thread wrote |
+| `Field(string Name, string Pattern)` | A field whose formatted value a wildcard pattern matches, ignoring case |
+| `Text(string Value)` | A message that holds the text, ignoring case |
+| `TextRegex(string Pattern)` | A message a regular expression matches, ignoring case |
+| `FieldRegex(string Name, string Pattern)` | A field whose formatted value a regular expression matches, ignoring case |
+
+Each case's constructor throws for what is not one.
+A regular expression's `Pattern` is as a query reads it back, with `/` for each `\/` it was written with, so the two are equal.
+
+### `LogLevelRange`, `LogFrameRange` (readonly record structs)
+
+The levels or frames a filter keeps, both ends kept: `All` (the `default`), `Empty`, `Only(x)`, `Between(a, b)`, `Contains(x)`, `Intersect(other)`, `IsAll`, `IsEmpty`.
+`LogLevelRange` has `Least` and `Most`, and `LogFrameRange` has `First` and `Last`.
+
+### `LogFilterError`
+
+`NotATerm`, `NotALevel`, `NotAFrame`, `NotAScope`, `NotAThread`, `NoText`, `NoValue`, `QuoteNotClosed`, `CannotLeaveOut`, `RegexNotClosed`, `NotARegex`: the `Error.Code` of a failed `Parse`.
 
 ## Unity
 

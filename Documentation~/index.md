@@ -26,6 +26,7 @@ Formatting waits for a reader: the Unity Console once a frame, a JSON lines file
 | **Backlog** | An error brings the records that led to it, marked as context |
 | **Frames** | Every record carries `Time.frameCount` |
 | **Sinks** | The Unity Console, a JSON lines file per session, and memory for tests |
+| **Views** | The records a filter query keeps, as rows that count repeats and nest under scopes, from a live store or a session's file |
 | **Unity's log** | A bridge brings every `Debug.Log` and exception into the store |
 | **No static logger** | A `Log` is handed in, like any other dependency |
 
@@ -39,6 +40,7 @@ Formatting waits for a reader: the Unity Console once a frame, a JSON lines file
 | [Events and Scopes](events-and-scopes.md) | Declarations, field types, templates, scopes, what the generator writes, the catalog |
 | [Store and Rules](store-and-rules.md) | The rings, levels, rules and rate limits, what the log says about itself |
 | [Sinks](sinks.md) | The drain, backlog, redaction, the Console, JSON lines and memory sinks, writing a sink |
+| [Reading Records](reading.md) | The view, filter queries, scopes, and reading a session's file back |
 | [Unity Integration](unity-integration.md) | The PlayerLoop pump, the `Debug.Log` bridge, Console links, Play Mode, caller paths in builds |
 | [Generator Diagnostics](diagnostics.md) | TLOG0001 to TLOG0010 |
 | [API Reference](api-reference.md) | Every public type and member |
@@ -70,4 +72,5 @@ The code it composes receives a `Log`.
 
 ## Version 2
 
-A `LogFilter` and a `LogView`, drawn by an Editor window and a runtime overlay, and a `LogArchive` to read a session's file back, are planned and not in this version.
+The reading model is in: a `LogView` of what a `LogFilter` keeps, over a live store or a `LogArchive` read back from a session's file.
+The Editor window that draws it, beside Unity's Console, is planned and not in this version.

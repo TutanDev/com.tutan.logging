@@ -49,6 +49,31 @@ namespace Tutan.Logging.Tests
         }
 
         [Test]
+        public void A_store_refuses_a_record_of_another_kind_or_level_than_its_event_declares()
+        {
+            using var captured = new Captured();
+
+            Assert.That(() => { captured.Log.Write(SaveLog.Events.Saved, LogLevel.Error, 0, "", 0); },
+                Throws.ArgumentException.With.Message.Contains("tests.save/Saved is declared at Information, and it was written at Error"));
+            Assert.That(() => { captured.Log.BeginScope(SaveLog.Events.Saved, LogLevel.Information, 0, "", 0); },
+                Throws.ArgumentException.With.Message.Contains("tests.save/Saved is an event, and it was written as a scope"));
+            Assert.That(() => { captured.Log.Write(SaveLog.Events.Saving, LogLevel.Information, 0, "", 0); },
+                Throws.ArgumentException.With.Message.Contains("tests.save/Saving is a scope, and it was written as an event"));
+        }
+
+        [Test]
+        public void A_store_refuses_a_record_at_no_level()
+        {
+            using var captured = new Captured();
+
+            Assert.That(() => { captured.Log.Write(HeardLog.Events.Heard, LogLevel.None, 0, "", 0); },
+                Throws.TypeOf<ArgumentOutOfRangeException>().With.Message.Contains("A record of tests.heard/Heard was written at None"));
+            Assert.That(() => { captured.Log.Write(SaveLog.Events.Saved, LogLevel.None, 0, "", 0); },
+                Throws.TypeOf<ArgumentOutOfRangeException>().With.Message.Contains("A record of tests.save/Saved was written at None"),
+                "No level, before another level than its own.");
+        }
+
+        [Test]
         public void Records_are_numbered_in_order_and_stamped_with_the_frame_they_were_written_in()
         {
             using var captured = new Captured();

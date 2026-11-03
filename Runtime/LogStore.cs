@@ -23,7 +23,7 @@ namespace Tutan.Logging
     /// owns it: there is no store the package makes on its own.
     /// </para>
     /// </remarks>
-    public sealed class LogStore
+    public sealed class LogStore : LogRecords
     {
         /// <summary>The fewest records a store holds.</summary>
         public const int MinRecords = 16;
@@ -103,22 +103,25 @@ namespace Tutan.Logging
         public Log Log => new Log(this, 0);
 
         /// <summary>The program's name, which a file sink writes first and names its file by.</summary>
-        public string Program { get; }
+        public override string Program { get; }
 
         /// <summary>When the store started, which turns a record's timestamp into a time.</summary>
-        public LogClock Clock { get; }
+        public override LogClock Clock { get; }
+
+        /// <summary>The catalog's events: every event the program declares, which is every event a record can be of.</summary>
+        public override IReadOnlyList<LogEventSpec> Events => LogCatalog.Events;
 
         /// <summary>The rules applied last.</summary>
         public LogRules Rules => Volatile.Read(ref _rules);
 
         /// <summary>How many records the rings hold at most, which is the size asked for rounded up to a power of two.</summary>
-        public int Capacity => _records.Length;
+        public override int Capacity => _records.Length;
 
         /// <summary>The frame every record written now is stamped with, 0 until the host first calls <see cref="EnterFrame"/>.</summary>
         public long Frame => Volatile.Read(ref _frame);
 
         /// <summary>The oldest sequence the store still holds.</summary>
-        public long First
+        public override long First
         {
             get
             {
@@ -128,7 +131,7 @@ namespace Tutan.Logging
         }
 
         /// <summary>The sequence the next record gets; one past the newest.</summary>
-        public long Next
+        public override long Next
         {
             get
             {
@@ -136,6 +139,15 @@ namespace Tutan.Logging
                     return _next;
             }
         }
+
+        /// <summary>Nothing: a store holds every record as it was written.</summary>
+        public override LogRedaction Redacted => LogRedaction.None;
+
+        /// <summary>None placed late: a store numbers its records as it writes them, so they are always in order.</summary>
+        public override LogLateMark LateMark => default;
+
+        /// <summary><see cref="Next"/>, with the <c>default</c> mark: there is nothing to read again.</summary>
+        public override LogLate LateFrom(LogLateMark seen) => new LogLate(Next, default);
 
         /// <summary>What <see cref="Tutan.Logging.Log.IsEnabled(LogEventSpec)"/> reads: one byte per spec, the least level it is captured at.</summary>
         internal byte[] Least => _least;
@@ -167,7 +179,7 @@ namespace Tutan.Logging
         /// fit, which it empties first. The read says the first sequence it copied, which is past
         /// <paramref name="from"/> by the number overwritten before they were read.
         /// </summary>
-        public LogRead Read(long from, LogBatch into)
+        public override LogRead Read(long from, LogBatch into)
         {
             if (into is null)
                 throw new ArgumentNullException(nameof(into));
@@ -195,7 +207,7 @@ namespace Tutan.Logging
         /// <paramref name="into"/>, in the order given, as many as fit, and says how many. The record
         /// that opened a scope still open is held however old it is.
         /// </summary>
-        public int Read(ReadOnlySpan<long> sequences, LogBatch into)
+        public override int Read(ReadOnlySpan<long> sequences, LogBatch into)
         {
             if (into is null)
                 throw new ArgumentNullException(nameof(into));
@@ -237,7 +249,8 @@ namespace Tutan.Logging
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal bool Refresh(LogEventSpec spec, byte level)
         {
-            if (_discards)
+            // A file's spec is its archive's alone, and a store captures only what this program declares.
+            if (_discards || spec.Origin == LogSpecOrigin.File)
                 return false;
             if (spec.Index < 0)
                 LogCatalog.Register(spec);
@@ -259,8 +272,16 @@ namespace Tutan.Logging
                 return LogWriter.Dropped(from);
             if (spec.Kind != (scope ? LogEventKind.Scope : LogEventKind.Event))
                 ThrowWrongKind(spec, scope);
+            if (level > LogLevel.Critical)
+                ThrowNotALevel(spec, level);
+            if (spec.Level.HasValue(out LogLevel declared) && level != declared)
+                ThrowWrongLevel(spec, level, declared);
             if (spec.Index < 0)
+            {
+                if (spec.Origin == LogSpecOrigin.File)
+                    ThrowOfAFile(spec);
                 LogCatalog.Register(spec);
+            }
 
             int thread = Environment.CurrentManagedThreadId;
             long under = from.Scope;
@@ -366,6 +387,17 @@ namespace Tutan.Logging
 
         private static void ThrowWrongKind(LogEventSpec spec, bool scope) =>
             throw new ArgumentException($"{spec.Key} is a{(scope ? "n event" : " scope")}, and it was written as a{(scope ? " scope" : "n event")}.", nameof(spec));
+
+        // A record at None no view shows, and a reader skips its line.
+        private static void ThrowNotALevel(LogEventSpec spec, LogLevel level) =>
+            throw new ArgumentOutOfRangeException(nameof(level), $"A record of {spec.Key} was written at {level}, and a record is at a level from Trace to Critical.");
+
+        private static void ThrowOfAFile(LogEventSpec spec) =>
+            throw new ArgumentException($"{spec.Key} was read back from a file, and a store writes only the events this program declares.", nameof(spec));
+
+        // A file says a record's level beside its event's, and a reader skips a record whose two disagree.
+        private static void ThrowWrongLevel(LogEventSpec spec, LogLevel level, LogLevel declared) =>
+            throw new ArgumentException($"{spec.Key} is declared at {declared}, and it was written at {level}.", nameof(level));
 
         private static void ThrowTooBig(LogEventSpec spec, int chars) =>
             throw new ArgumentOutOfRangeException(nameof(chars), $"A record of {spec.Key} with {chars} slots of chars does not fit the store's rings.");
@@ -546,9 +578,10 @@ namespace Tutan.Logging
     }
 
     /// <summary>
-    /// One record as the rings hold it. A record's bits and refs are where <see cref="BitsAt"/> and
-    /// <see cref="RefsAt"/> say, positions that only grow and wrap at 2^32, so a ring position is one
-    /// mask away and an overwrite is one subtraction away.
+    /// One record as the rings hold it, and as a batch and an archive copy it. In the rings, a
+    /// record's bits and refs are where <see cref="BitsAt"/> and <see cref="RefsAt"/> say, positions
+    /// that only grow and wrap at 2^32, so a ring position is one mask away and an overwrite is one
+    /// subtraction away; a copy holds them where its own buffers do.
     /// </summary>
     internal struct LogEntry
     {
@@ -570,6 +603,9 @@ namespace Tutan.Logging
         public byte Refs;
         public LogLevel Level;
         public LogRecordKind Kind;
+
+        // Written as an error's backlog, which a store's record never is: a session's record, as its sink was handed it.
+        public bool Backlog;
     }
 
     /// <summary>A scope that is open: what its closing record needs, and a copy of its opening if the rings overwrote it.</summary>

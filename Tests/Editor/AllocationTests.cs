@@ -115,6 +115,80 @@ namespace Tutan.Logging.Tests
             Assert.That(sink.Written, Is.GreaterThan(0));
         }
 
+        [TestCase("level>=debug tests.save -Slot:3")]
+        [TestCase("level>=debug \"slot\" -Slot:3")]
+        public void Updating_a_view_allocates_nothing(string query)
+        {
+            var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Records: 256, Program: "Tests"));
+            var view = new LogView(store, LogFilter.Parse(query).ValueUnsafe());
+            Log log = store.Log;
+            void Frame()
+            {
+                // A scope a frame, which the view learns, draws as a row, and forgets once the store overwrote it.
+                using (LogScope saving = log.Saving(1))
+                {
+                    for (int slot = 0; slot < 8; slot++)
+                    {
+                        saving.Log.Saved(slot, File);
+                        saving.Log.Wrote(slot);
+                        saving.Log.Step(slot);
+                    }
+                }
+
+                view.Update();
+            }
+
+            // Past what the store holds, so the rows are as many as they ever are and only go round.
+            for (int i = 0; i < 32; i++)
+                Frame();
+
+            // Three frames write past a quarter of what the store holds, so the scopes forget what it overwrote.
+            Assert.That(() => { Frame(); Frame(); Frame(); }, Is.Not.AllocatingGCMemory());
+            Assert.That(view.Count, Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void Updating_a_view_of_an_archive_allocates_nothing()
+        {
+            var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Records: 256, Program: "Tests"));
+            var archive = new LogArchive(store.Program, store.Clock, cap: 256);
+            var view = new LogView(archive, LogFilter.Parse("level>=debug tests.save -Slot:3").ValueUnsafe());
+            var batch = new LogBatch();
+            Log log = store.Log;
+            // The records a console sink would keep: the archive grows as it keeps, which is not the view's to measure.
+            void Keep()
+            {
+                using (LogScope saving = log.Saving(1))
+                {
+                    for (int slot = 0; slot < 8; slot++)
+                    {
+                        saving.Log.Saved(slot, File);
+                        saving.Log.Wrote(slot);
+                        saving.Log.Step(slot);
+                    }
+                }
+
+                store.Read(archive.Next, batch);
+                for (int i = 0; i < batch.Count; i++)
+                    archive.Keep(batch[i], backlog: false);
+            }
+
+            for (int i = 0; i < 32; i++)
+            {
+                Keep();
+                view.Update();
+            }
+
+            // Three updates read past a quarter of what the archive holds, so the scopes forget what it let go.
+            for (int i = 0; i < 3; i++)
+            {
+                Keep();
+                Assert.That(view.Update, Is.Not.AllocatingGCMemory());
+            }
+
+            Assert.That(view.Count, Is.GreaterThan(0));
+        }
+
         /// <summary>Formats every record into a buffer it keeps, as a sink that writes text would, and keeps nothing else.</summary>
         private sealed class FormattingSink : ILogSink
         {

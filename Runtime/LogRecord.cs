@@ -65,6 +65,13 @@ namespace Tutan.Logging
         public int Suppressed => Entry.Suppressed;
 
         /// <summary>
+        /// Whether it was written as an error's backlog, as context for the error: a record below its
+        /// sink's level, which the sink was handed because an error after it shares its scope. A
+        /// store's records never are; a session's are as its sink was handed them.
+        /// </summary>
+        public bool IsBacklog => Entry.Backlog;
+
+        /// <summary>
         /// The call that wrote it, as the compiler filled in the generated method's caller-info
         /// parameters: what a console links to. A scope's closing has its opening's. A record written
         /// by the bridge from Unity's log has none.
@@ -77,7 +84,14 @@ namespace Tutan.Logging
         /// <summary>How many fields it has: its spec's, or none for a scope's closing.</summary>
         public int FieldCount => Kind == LogRecordKind.ScopeEnd ? 0 : Event.FieldArray.Length;
 
-        private ref readonly LogEntry Entry => ref _batch.Entry(_index);
+        /// <summary>The record as its batch holds it, which an archive copies.</summary>
+        internal ref readonly LogEntry Entry => ref _batch.Entry(_index);
+
+        /// <summary>Its slots of values, as its batch holds them.</summary>
+        internal ReadOnlySpan<long> Bits => _batch.Bits(_index);
+
+        /// <summary>The strings and exceptions it keeps, as its batch holds them.</summary>
+        internal ReadOnlySpan<object?> Refs => _batch.Refs(_index);
 
         /// <summary>The field at <paramref name="index"/>, in the order of the spec's.</summary>
         /// <exception cref="ArgumentOutOfRangeException">The record has no field at <paramref name="index"/>.</exception>
@@ -352,7 +366,7 @@ namespace Tutan.Logging
                 case LogValueKind.Exception:
                     var exception = (Exception)_ref!;
                     written = 0;
-                    if (LogText.Append(exception.GetType().Name, destination, ref written)
+                    if (LogText.Append(LogText.TypeName(exception, full: false), destination, ref written)
                         && LogText.Append(": ", destination, ref written)
                         && LogText.Append(exception.Message, destination, ref written))
                         return true;

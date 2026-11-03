@@ -89,6 +89,7 @@ Assert.That(saved.Field("Slot"), Is.EqualTo(3));
 - **Backlog:** a sink writes the latest records below its level that share an error's scope before the error, marked as context.
 - **Frames:** every record carries `Time.frameCount`, stamped by a pump in the PlayerLoop.
 - **JSON lines file:** one self-describing file per session in `Application.persistentDataPath`, with the oldest pruned.
+- **Views:** a `LogView` reads a live store, or a session's file read back by `LogFile.Read`, as rows a filter query such as `level>=warning game.* Slot:3 /fail(ed|ure)/` keeps, with repeats counted and scopes nested.
 - **Unity's own log:** a bridge brings every `Debug.Log`, warning, error and exception into the store, so they reach the file with their backlog.
 - **No static logger:** a `Log` is a dependency like any other, handed in by the composition root.
 
@@ -109,6 +110,7 @@ The code it writes is C# 9, so no `csc.rsp` is needed.
 | [Events and Scopes](Documentation~/events-and-scopes.md) | Declarations, field types, templates, scopes, what the generator writes, the catalog |
 | [Store and Rules](Documentation~/store-and-rules.md) | The rings, levels, rules and rate limits, what the log says about itself |
 | [Sinks](Documentation~/sinks.md) | The drain, backlog, redaction, the Console, JSON lines and memory sinks, writing a sink |
+| [Reading Records](Documentation~/reading.md) | The view, filter queries, scopes, and reading a session's file back |
 | [Unity Integration](Documentation~/unity-integration.md) | The PlayerLoop pump, the `Debug.Log` bridge, Console links, Play Mode, caller paths in builds |
 | [Generator Diagnostics](Documentation~/diagnostics.md) | TLOG0001 to TLOG0010 |
 | [API Reference](Documentation~/api-reference.md) | Every public type and member |

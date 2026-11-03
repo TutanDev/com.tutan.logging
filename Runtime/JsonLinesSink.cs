@@ -333,7 +333,7 @@ namespace Tutan.Logging
                     var exception = (Exception)value.AsRef()!;
                     _json.StartObject();
                     _json.Name("type");
-                    _json.String(exception.GetType().FullName ?? exception.GetType().Name);
+                    _json.String(LogText.TypeName(exception, full: true));
                     WriteText("message", exception.Message, redact);
                     WriteText("text", exception.ToString(), redact);
                     _json.EndObject();

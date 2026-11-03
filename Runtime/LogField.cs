@@ -244,6 +244,42 @@ namespace Tutan.Logging
 
             return true;
         }
+
+        /// <summary>
+        /// Reads back what <see cref="TryFormat"/> writes with no format: a member's name, a
+        /// <c>[Flags]</c> value's names joined by <c> | </c>, or the number. Names are read as written,
+        /// with their case.
+        /// </summary>
+        public bool TryParse(string text, out long value)
+        {
+            if (long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
+                return true;
+
+            value = 0;
+            for (int start = 0; ;)
+            {
+                int bar = text.IndexOf(" | ", start, StringComparison.Ordinal);
+                if (bar >= 0 && !Flags)
+                    return Fail(out value);
+
+                string name = bar < 0 ? text.Substring(start) : text.Substring(start, bar - start);
+                int member = Array.IndexOf(_names, name);
+                if (member < 0)
+                    return Fail(out value);
+
+                value |= _values[member];
+                if (bar < 0)
+                    return true;
+
+                start = bar + 3;
+            }
+        }
+
+        private static bool Fail(out long value)
+        {
+            value = 0;
+            return false;
+        }
     }
 
     /// <summary>Formats a value of an unmanaged formattable type from the slots it was copied into.</summary>

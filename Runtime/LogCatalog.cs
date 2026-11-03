@@ -35,7 +35,7 @@ namespace Tutan.Logging
         }
 
         /// <summary>Every spec registered, in the order of their indices.</summary>
-        public static IReadOnlyList<LogEventSpec> Events => s_registry.EventArray;
+        public static IReadOnlyList<LogEventSpec> Events => s_registry.EventList;
 
         /// <summary>How many specs are registered, which is one more than the highest index.</summary>
         public static int Count => s_registry.EventArray.Length;
@@ -63,6 +63,8 @@ namespace Tutan.Logging
         /// It takes no assembly, unlike FRL's, since Unity has no unloading to let a spec go on, and so
         /// the code the generator writes into an assembly names no type it would need a reference for.
         /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="specs"/>, or a spec in it, is null; none of them is registered.</exception>
+        /// <exception cref="ArgumentException">A spec was read back from a file; none of them is registered.</exception>
         [EditorBrowsable(EditorBrowsableState.Never)]
         public static void Register(params LogEventSpec[] specs) => s_registry.Register(specs);
     }
@@ -81,8 +83,11 @@ namespace Tutan.Logging
         /// <summary>The specs as of the last registration, in the order of their indices.</summary>
         public LogEventSpec[] EventArray => Volatile.Read(ref _snapshot).Events;
 
-        /// <summary>The conflicts found so far, in the order they were found.</summary>
-        public LogCatalogConflict[] Conflicts => Volatile.Read(ref _snapshot).Conflicts;
+        /// <summary>The specs as of the last registration, read-only.</summary>
+        public IReadOnlyList<LogEventSpec> EventList => Volatile.Read(ref _snapshot).EventList;
+
+        /// <summary>The conflicts found so far, in the order they were found, read-only.</summary>
+        public IReadOnlyList<LogCatalogConflict> Conflicts => Volatile.Read(ref _snapshot).ConflictList;
 
         /// <summary>The spec with <paramref name="key"/>: the first one registered when two classes have it.</summary>
         public Optional<LogEventSpec> Find(string key)
@@ -97,6 +102,15 @@ namespace Tutan.Logging
             if (specs is null)
                 throw new ArgumentNullException(nameof(specs));
 
+            // Every spec is checked before any is registered, so a registration is all or nothing.
+            for (int i = 0; i < specs.Length; i++)
+            {
+                if (specs[i] is null)
+                    throw new ArgumentNullException(nameof(specs), $"The spec at {i} is null.");
+                if (specs[i].Origin == LogSpecOrigin.File)
+                    throw new ArgumentException($"{specs[i].Key} was read back from a file, and the catalog holds only the events this program declares.", nameof(specs));
+            }
+
             lock (_lock)
             {
                 Snapshot before = _snapshot;
@@ -105,9 +119,8 @@ namespace Tutan.Logging
 
                 foreach (LogEventSpec spec in specs)
                 {
-                    if (spec is null)
-                        throw new ArgumentNullException(nameof(specs), "One of the specs to register is null.");
-                    if (spec.Index >= 0)
+                    // Registered before, or earlier in this call.
+                    if (spec.Index >= 0 || (events is not null && events.IndexOf(spec, before.Events.Length) >= 0))
                         continue;
 
                     events ??= new List<LogEventSpec>(before.Events);
@@ -129,12 +142,18 @@ namespace Tutan.Logging
                     else
                         _byKey[spec.Key] = spec;
 
-                    spec.Register(events.Count);
                     events.Add(spec);
                 }
 
-                if (events is not null)
-                    Volatile.Write(ref _snapshot, new Snapshot(events.ToArray(), conflicts!.ToArray()));
+                if (events is null)
+                    return;
+
+                Volatile.Write(ref _snapshot, new Snapshot(events.ToArray(), conflicts!.ToArray()));
+
+                // Only now: a writer that sees a spec's index writes a record of it, and a reader
+                // names that record from the specs it reads after, which then hold it.
+                for (int index = before.Events.Length; index < events.Count; index++)
+                    events[index].Register(index);
             }
         }
 
@@ -147,11 +166,18 @@ namespace Tutan.Logging
             {
                 Events = events;
                 Conflicts = conflicts;
+                EventList = Array.AsReadOnly(events);
+                ConflictList = Array.AsReadOnly(conflicts);
             }
 
             public LogEventSpec[] Events { get; }
 
             public LogCatalogConflict[] Conflicts { get; }
+
+            /// <summary><see cref="Events"/>, for a reader outside, which cannot change what a batch names its records by.</summary>
+            public IReadOnlyList<LogEventSpec> EventList { get; }
+
+            public IReadOnlyList<LogCatalogConflict> ConflictList { get; }
         }
     }
 

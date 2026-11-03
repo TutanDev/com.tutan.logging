@@ -62,6 +62,59 @@ namespace Tutan.Logging
             return new JsonLinesSink(stream, leaveOpen: false, name: path);
         }
 
+        /// <summary>
+        /// Reads back the log a <see cref="JsonLinesSink"/> wrote to <paramref name="path"/>, as far as it
+        /// goes: a session that is still writing it is read up to its last whole line. A line it cannot
+        /// read is skipped and said in <see cref="LogSessionFile.Skipped"/>. Fails with
+        /// <see cref="LogFileReadError"/> as the error's code when the file cannot be read, or is not a
+        /// log of the format this reads.
+        /// </summary>
+        public static Result<LogSessionFile> Read(string path)
+        {
+            if (path is null)
+                throw new ArgumentNullException(nameof(path));
+
+            FileStream stream;
+            try
+            {
+                // Shared for writing and deleting, so a session that writes it, or a folder that keeps the latest few, goes on.
+                stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 64 * 1024);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return Unreadable(path, exception);
+            }
+
+            using (stream)
+                return Read(stream, path);
+        }
+
+        /// <summary>
+        /// Reads back the log a <see cref="JsonLinesSink"/> wrote to <paramref name="stream"/>, from where
+        /// it is to its end, which it leaves open; <paramref name="name"/> says what it is in the errors
+        /// and in <see cref="LogSessionFile.Path"/>. As <see cref="Read(string)"/> does otherwise.
+        /// </summary>
+        public static Result<LogSessionFile> Read(Stream stream, string name)
+        {
+            if (stream is null)
+                throw new ArgumentNullException(nameof(stream));
+            if (name is null)
+                throw new ArgumentNullException(nameof(name));
+
+            try
+            {
+                using var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: true, bufferSize: 64 * 1024, leaveOpen: true);
+                return ArchiveReader.Read(name, reader);
+            }
+            catch (Exception exception) when (exception is IOException or ObjectDisposedException or NotSupportedException)
+            {
+                return Unreadable(name, exception);
+            }
+        }
+
+        private static Error Unreadable(string file, Exception exception) =>
+            F.Error($"The log {file} could not be read: {exception.Message}", (int)LogFileReadError.Unreadable);
+
         /// <summary><paramref name="program"/> with every char a file's name cannot have made a <c>_</c>.</summary>
         private static string FileName(string program)
         {
