@@ -20,8 +20,10 @@ namespace Tutan.Logging
     /// with a later sequence, as an error's context is, is placed among them, and
     /// <see cref="LogRecords.LateFrom"/> says where to read again to see it. Past its
     /// <see cref="Capacity"/>, it lets its oldest records go, a block at a time, and
-    /// <see cref="Dropped"/> counts them; a record older than what it let go is let go too. A file's
-    /// archive holds what its file held, and takes no record after.
+    /// <see cref="Dropped"/> counts them. A console's clear lets every record go. A record older than
+    /// what it let go is let go too, and so is one older than all it holds while it is full, which
+    /// would be the first it let go. A file's archive holds what its file held, and an ended
+    /// session's what its sink kept, and neither takes a record after.
     /// </para>
     /// <para>
     /// Its events are its own, in the order it was first handed a record of each, so a file's are the
@@ -55,23 +57,22 @@ namespace Tutan.Logging
         private long _dropped;
         private long _late;
         private long _pendingLost;
+
+        // Where it stopped when it holds nothing: 1 until it lets records go, then one past the newest it let go.
+        private long _floor = 1;
+
+        // The block it let go last, emptied, which the next block it needs is: so past its cap it
+        // keeps records without allocating, as a console sink does a frame at a time.
+        private Block? _spare;
         private bool _sealed;
 
-        /// <summary>An empty archive of a session of <paramref name="program"/> kept whole, which holds at most <paramref name="cap"/> records.</summary>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="cap"/> is less than 1.</exception>
-        internal LogArchive(string program, LogClock clock, int cap)
-            : this(program, clock, LogRedaction.None, cap)
-        {
-        }
-
         /// <summary>
-        /// An empty archive of the file of a session of <paramref name="program"/>, whose sink left
-        /// <paramref name="redacted"/> out of it, which its reader fills and then seals.
+        /// An empty archive of a live session of <paramref name="program"/>, which holds at most
+        /// <paramref name="cap"/> records: kept whole, or lacking <paramref name="redacted"/> when the
+        /// records it is handed already lack it.
         /// </summary>
-        internal static LogArchive OfFile(string program, LogClock clock, LogRedaction redacted) =>
-            new LogArchive(program, clock, redacted, int.MaxValue);
-
-        private LogArchive(string program, LogClock clock, LogRedaction redacted, int cap)
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="cap"/> is less than 1.</exception>
+        internal LogArchive(string program, LogClock clock, int cap, LogRedaction redacted = LogRedaction.None)
         {
             if (cap < 1)
                 throw new ArgumentOutOfRangeException(nameof(cap), $"An archive holds at least one record, and {cap} was given.");
@@ -83,19 +84,26 @@ namespace Tutan.Logging
             _blockSize = Math.Max(1, Math.Min(MostBlock, cap / 4));
         }
 
+        /// <summary>
+        /// An empty archive of the file of a session of <paramref name="program"/>, whose sink left
+        /// <paramref name="redacted"/> out of it, which its reader fills and then seals.
+        /// </summary>
+        internal static LogArchive OfFile(string program, LogClock clock, LogRedaction redacted) =>
+            new LogArchive(program, clock, int.MaxValue, redacted);
+
         /// <inheritdoc />
         public override string Program { get; }
 
         /// <summary>When the session's store started; a record's timestamp counts from it.</summary>
         public override LogClock Clock { get; }
 
-        /// <summary>What the sink that wrote its file left out of the records: nothing for a session kept whole.</summary>
+        /// <summary>What the sink that wrote its file left out of the records: nothing for a session kept whole, as a console sink keeps one.</summary>
         public override LogRedaction Redacted { get; }
 
         /// <summary>Its events, in the order it was first handed a record of each, or a file declares them.</summary>
         public override IReadOnlyList<LogEventSpec> Events => Volatile.Read(ref _eventList);
 
-        /// <summary>The most records it holds: a session's cap, or every record a file holds.</summary>
+        /// <summary>The most records it holds: a live session's cap, or every record a file or an ended session holds.</summary>
         public override int Capacity => Volatile.Read(ref _cap);
 
         /// <summary>How many records it holds, never more than <see cref="Capacity"/>.</summary>
@@ -108,7 +116,7 @@ namespace Tutan.Logging
             }
         }
 
-        /// <summary>How many records it let go to stay under its <see cref="Capacity"/>, the oldest first.</summary>
+        /// <summary>How many records it let go to stay under its <see cref="Capacity"/>, the oldest first, since it was last cleared.</summary>
         public long Dropped
         {
             get
@@ -158,10 +166,10 @@ namespace Tutan.Logging
             }
         }
 
-        // 1 while it holds nothing, which every sequence is at or after.
-        private long FirstHeld => _blocks.Count > 0 ? _blocks[0].First : 1;
+        // Where it stopped while it holds nothing: 1, which every sequence is at or after, until it lets records go.
+        private long FirstHeld => _blocks.Count > 0 ? _blocks[0].First : _floor;
 
-        private long NextHeld => _blocks.Count > 0 ? _blocks[_blocks.Count - 1].Last + 1 : 1;
+        private long NextHeld => _blocks.Count > 0 ? _blocks[_blocks.Count - 1].Last + 1 : _floor;
 
         /// <inheritdoc />
         public override LogLate LateFrom(LogLateMark seen)
@@ -254,7 +262,7 @@ namespace Tutan.Logging
         }
 
         /// <summary>The index its records of <paramref name="spec"/> are stamped with, which it gives a spec the first time it is handed one.</summary>
-        /// <exception cref="InvalidOperationException">It is a file's archive, which takes no record after the file's.</exception>
+        /// <exception cref="InvalidOperationException">It is sealed: a file's archive, or an ended session's, which takes no record after.</exception>
         internal int Declare(LogEventSpec spec)
         {
             if (spec is null)
@@ -270,9 +278,9 @@ namespace Tutan.Logging
         /// <summary>
         /// Keeps a copy of <paramref name="record"/>, as a sink was handed it: as an error's backlog
         /// when <paramref name="backlog"/> says so. False when it holds the record's sequence already,
-        /// or the record is older than what it let go.
+        /// or it lets the record go as it is handed: older than what it let go, or than all it holds while it is full.
         /// </summary>
-        /// <exception cref="InvalidOperationException">It is a file's archive, which takes no record after the file's.</exception>
+        /// <exception cref="InvalidOperationException">It is sealed: a file's archive, or an ended session's, which takes no record after.</exception>
         internal bool Keep(LogRecord record, bool backlog)
         {
             LogEntry entry = record.Entry;
@@ -288,9 +296,9 @@ namespace Tutan.Logging
         /// <summary>
         /// Keeps a record its reader made, whose event is the index <see cref="Declare"/> gave its
         /// spec, and whose <see cref="LogEntry.BitsAt"/> and <see cref="LogEntry.RefsAt"/> it sets.
-        /// False when it holds the sequence already, or the record is older than what it let go.
+        /// False when it holds the sequence already, or it lets the record go as it is handed, as <see cref="Keep"/> does.
         /// </summary>
-        /// <exception cref="InvalidOperationException">It is a file's archive, which takes no record after the file's.</exception>
+        /// <exception cref="InvalidOperationException">It is sealed: a file's archive, or an ended session's, which takes no record after.</exception>
         internal bool Add(in LogEntry entry, ReadOnlySpan<long> bits, ReadOnlySpan<object?> refs)
         {
             lock (_lock)
@@ -309,8 +317,18 @@ namespace Tutan.Logging
                 return Find(sequence, out _, out _);
         }
 
+        /// <summary>
+        /// Whether it would keep the record of <paramref name="sequence"/>: it takes records still, the
+        /// record is not older than what it let go, and it does not hold it.
+        /// </summary>
+        internal bool CanKeep(long sequence)
+        {
+            lock (_lock)
+                return !_sealed && !WouldLetGo(sequence) && !Find(sequence, out _, out _);
+        }
+
         /// <summary>Counts <paramref name="count"/> records lost before the next record kept in order, which says so when it is read.</summary>
-        /// <exception cref="InvalidOperationException">It is a file's archive, which takes no record after the file's.</exception>
+        /// <exception cref="InvalidOperationException">It is sealed: a file's archive, or an ended session's, which takes no record after.</exception>
         internal void Lose(long count)
         {
             if (count < 0)
@@ -323,12 +341,36 @@ namespace Tutan.Logging
             }
         }
 
-        /// <summary>Holds every record it holds now, and takes no more: a file's archive, which holds all the file does.</summary>
+        /// <summary>
+        /// Lets go of every record it holds, as a console's clear does, and keeps what it is handed
+        /// after: <see cref="LogRecords.First"/> and <see cref="LogRecords.Next"/> are where it stopped,
+        /// and it takes no record older. What it dropped, and a loss no record carried yet, were before
+        /// the clear, and go with it.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">It is sealed: a file's, or an ended session's.</exception>
+        internal void Clear()
+        {
+            lock (_lock)
+            {
+                CheckOpen();
+                _floor = NextHeld;
+                _blocks.Clear();
+                _count = 0;
+                _dropped = 0;
+                _pendingLost = 0;
+            }
+        }
+
+        /// <summary>
+        /// Holds every record it holds now, and takes no more: a file's archive, which holds all the
+        /// file does, and an ended session's, which its sink writes to no more.
+        /// </summary>
         internal void Seal()
         {
             lock (_lock)
             {
                 _sealed = true;
+                _spare = null;
                 Volatile.Write(ref _cap, Math.Max(_count, 1));
             }
         }
@@ -336,8 +378,13 @@ namespace Tutan.Logging
         private void CheckOpen()
         {
             if (_sealed)
-                throw new InvalidOperationException("A file's archive holds what its file held, and takes no record after.");
+                throw new InvalidOperationException("The archive is sealed: it holds what its file held, or what its session kept before it ended, and takes no record after.");
         }
+
+        // With the lock held. Whether it lets the record go as it is handed: it is older than what was
+        // let go, by the cap or a clear, or it is full and the record is older than all it holds, so
+        // the cap would let it go first, and the newer records of its block with it.
+        private bool WouldLetGo(long sequence) => sequence < _floor || (_count >= _cap && sequence < FirstHeld);
 
         private int DeclareHeld(LogEventSpec spec)
         {
@@ -359,6 +406,9 @@ namespace Tutan.Logging
         {
             CheckOpen();
             long sequence = entry.Sequence;
+            if (WouldLetGo(sequence))
+                return false;
+
             if (_blocks.Count == 0 || sequence > _blocks[_blocks.Count - 1].Last)
             {
                 Block last = _blocks.Count > 0 ? _blocks[_blocks.Count - 1] : AddBlock();
@@ -380,12 +430,10 @@ namespace Tutan.Logging
             return true;
         }
 
-        /// <summary>Places a record before the newest held, where its sequence goes; false when it is there already or is older than what was let go.</summary>
+        /// <summary>Places a record before the newest held, where its sequence goes; false when it is there already.</summary>
         private bool Place(in LogEntry entry, ReadOnlySpan<long> bits, ReadOnlySpan<object?> refs)
         {
             long sequence = entry.Sequence;
-            if (_dropped > 0 && sequence < FirstHeld)
-                return false;
 
             // The last block that starts at or before it, or the first when it is older than all.
             int index = 0;
@@ -413,14 +461,19 @@ namespace Tutan.Logging
             if (block.Count == _blockSize && _blockSize == 1)
             {
                 // A block of one does not halve: the record is a block of its own, beside it.
-                var own = new Block(_blockSize);
+                Block own = NewBlock();
                 _blocks.Insert(at == 0 ? index : index + 1, own);
                 block = own;
                 at = 0;
             }
             else if (block.Count == _blockSize)
             {
-                (Block left, Block right) = block.Split(_blockSize);
+                // The halves take the spare, when it has one, and a new block, and the block they halve is the spare after.
+                Block left = NewBlock();
+                Block right = NewBlock();
+                block.SplitInto(left, right);
+                block.Empty();
+                _spare = block;
                 _blocks[index] = left;
                 _blocks.Insert(index + 1, right);
                 bool newer = at >= left.Count;
@@ -436,8 +489,16 @@ namespace Tutan.Logging
 
         private Block AddBlock()
         {
-            var block = new Block(_blockSize);
+            Block block = NewBlock();
             _blocks.Add(block);
+            return block;
+        }
+
+        // The spare, when it has one, so a block it let go is the next it fills.
+        private Block NewBlock()
+        {
+            Block block = _spare ?? new Block(_blockSize);
+            _spare = null;
             return block;
         }
 
@@ -447,6 +508,12 @@ namespace Tutan.Logging
             _blocks.RemoveAt(0);
             _count -= front.Count;
             _dropped += front.Count;
+            _floor = front.Last + 1;
+
+            // Readers copy what they read under the lock, so none holds the block now. Every block is
+            // of one size, and its buffers grow as any block's do.
+            front.Empty();
+            _spare = front;
         }
 
         private long SequenceAt(int block, int at) => block < _blocks.Count ? _blocks[block].Entries[at].Sequence : NextHeld;
@@ -540,19 +607,27 @@ namespace Tutan.Logging
                 Count++;
             }
 
-            /// <summary>Two blocks of its records, the older half and the newer, each with only its own bits and refs.</summary>
-            public (Block Left, Block Right) Split(int size)
+            /// <summary>Holds nothing, keeping its buffers, and lets go of the values it held, so it can be filled again.</summary>
+            public void Empty()
             {
-                var left = new Block(size);
-                var right = new Block(size);
+                Array.Clear(Entries, 0, Count);
+                Array.Clear(_refs, 0, _refsUsed);
+                if (_lost is not null)
+                    Array.Clear(_lost, 0, Count);
+                _bitsUsed = 0;
+                _refsUsed = 0;
+                Count = 0;
+            }
+
+            /// <summary>Copies the older half of its records into <paramref name="left"/> and the newer into <paramref name="right"/>, both empty, each with only its own bits and refs.</summary>
+            public void SplitInto(Block left, Block right)
+            {
                 int half = Count / 2;
                 for (int at = 0; at < Count; at++)
                 {
                     Block to = at < half ? left : right;
                     to.Insert(to.Count, Entries[at], BitsOf(at), RefsOf(at), LostBefore(at));
                 }
-
-                return (left, right);
             }
 
             private static int Append<T>(ref T[] buffer, ref int used, ReadOnlySpan<T> items)

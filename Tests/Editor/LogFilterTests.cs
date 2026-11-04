@@ -334,13 +334,14 @@ namespace Tutan.Logging.Tests
             var scopes = new LogScopes(store);
             var batch = new LogBatch();
             store.Read(store.First, batch);
-            var pass = new FilterPass(Parse("-File:/^(a+)+$/ -File:/^(?:a+)+$/"));
+            // Each loop holds a group that captures: the engine reduces (?:a+)+ to a+, which is quick.
+            var pass = new FilterPass(Parse("-File:/^(a+)+$/ -File:/^(a+)*$/"));
 
             Assert.That(pass.Matches(batch[0], scopes), Is.True);
             Assert.That(pass.GaveUp, Is.EqualTo(new[]
             {
                 new LogFilterTerm.FieldRegex("File", "^(a+)+$"),
-                new LogFilterTerm.FieldRegex("File", "^(?:a+)+$"),
+                new LogFilterTerm.FieldRegex("File", "^(a+)*$"),
             }));
         }
 
@@ -479,6 +480,25 @@ namespace Tutan.Logging.Tests
         public void A_wildcard_matches_whole_text(string pattern, string text, bool matches)
         {
             Assert.That(Wildcard.Matches(pattern, text), Is.EqualTo(matches));
+        }
+
+        [TestCase("Saved slot 3 as A.sav", "SLOT", true)]
+        [TestCase("Saved slot 3 as A.sav", "a.SAV", true)]
+        [TestCase("Saved slot 3 as A.sav", "Saved", true)]
+        [TestCase("Saved slot 3 as A.sav", "slots", false)]
+        [TestCase("aab", "ab", true)]
+        [TestCase("ab", "abc", false)]
+        [TestCase("", "a", false)]
+        [TestCase("Saved ÄRGER.sav", "ärger", true)]
+        [TestCase("Ärger", "arger", false)]
+        [TestCase("Ошибка сохранения", "ОШИБКА", true)]
+        [TestCase("σφάλμα", "ΣΦΆΛΜΑ", true)]
+        [TestCase("Straße", "STRASSE", false)]
+        [TestCase("Saved 💾 slot", "💾", true)]
+        public void Text_holds_a_value_wherever_it_is_ignoring_case(string text, string value, bool holds)
+        {
+            Assert.That(IgnoringCase.Holds(text, value), Is.EqualTo(holds));
+            Assert.That(holds, Is.EqualTo(text.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0), "As OrdinalIgnoreCase finds it.");
         }
 
         [Test]

@@ -117,6 +117,7 @@ namespace Tutan.Logging.Tests
 
         [TestCase("level>=debug tests.save -Slot:3")]
         [TestCase("level>=debug \"slot\" -Slot:3")]
+        [TestCase("level>=debug tests.* -Slot:3")]
         public void Updating_a_view_allocates_nothing(string query)
         {
             var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Records: 256, Program: "Tests"));
@@ -145,6 +146,36 @@ namespace Tutan.Logging.Tests
             // Three frames write past a quarter of what the store holds, so the scopes forget what it overwrote.
             Assert.That(() => { Frame(); Frame(); Frame(); }, Is.Not.AllocatingGCMemory());
             Assert.That(view.Count, Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void Keeping_a_console_session_past_its_cap_allocates_nothing()
+        {
+            var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Records: 256, Program: "Tests"));
+            var sessions = new ConsoleSessions(live: true);
+            using var drain = new LogDrain(store, (new LogConsoleSink(64, "console", sessions), new LogSinkOptions(LogLevel.Debug)));
+            Log log = store.Log;
+            void Frame()
+            {
+                using (LogScope saving = log.Saving(1))
+                {
+                    for (int slot = 0; slot < 8; slot++)
+                    {
+                        saving.Log.Saved(slot, File);
+                        saving.Log.Wrote(slot);
+                    }
+                }
+
+                drain.Pump();
+            }
+
+            // Past its cap, so its blocks are as many as they ever are, and each it lets go is the next it fills.
+            for (int i = 0; i < 32; i++)
+                Frame();
+
+            // Three frames keep more than three of its blocks of sixteen.
+            Assert.That(() => { Frame(); Frame(); Frame(); }, Is.Not.AllocatingGCMemory());
+            Assert.That(sessions.Sessions[0].Records.Dropped, Is.GreaterThan(0));
         }
 
         [Test]

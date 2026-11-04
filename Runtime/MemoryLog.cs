@@ -91,7 +91,7 @@ namespace Tutan.Logging
             get
             {
                 lock (_lock)
-                    return _records.ToArray();
+                    return Array.AsReadOnly(_records.ToArray());
             }
         }
 

@@ -60,8 +60,8 @@ namespace Tutan.Logging.Tests
             LogSessionFile file = Read(lines);
 
             Assert.That(file.Skipped, Is.Empty);
-            MemoryRecord[] written = Records(store);
-            MemoryRecord[] read = Records(file.Archive);
+            MemoryRecord[] written = Held.Records(store);
+            MemoryRecord[] read = Held.Records(file.Archive);
             Assert.That(read.Length, Is.EqualTo(written.Length));
             for (int i = 0; i < written.Length; i++)
             {
@@ -113,10 +113,11 @@ namespace Tutan.Logging.Tests
                 store.EnterFrame(1);
                 using (LogScope saving = store.Log.Saving(1))
                 {
-                    clock.Advance(TimeSpan.FromMilliseconds(12.5));
+                    // In ticks: on Unity's Mono, TimeSpan.FromMilliseconds rounds to a whole millisecond.
+                    clock.Advance(TimeSpan.FromTicks(125_000));
                     saving.Log.Saved(1, "A.sav");
                     Stores.OnAnotherThread(() => saving.Log.Wrote(4));
-                    clock.Advance(TimeSpan.FromMilliseconds(27.5));
+                    clock.Advance(TimeSpan.FromTicks(275_000));
                 }
 
                 for (int i = 0; i < 5; i++)
@@ -147,7 +148,7 @@ namespace Tutan.Logging.Tests
                 Assert.That((a.Elapsed - b.Elapsed).Duration(), Is.LessThanOrEqualTo(TimeSpan.FromTicks(5)));
             }
 
-            MemoryRecord[] records = Records(archive);
+            MemoryRecord[] records = Held.Records(archive);
             Assert.That(records.Single(r => r.Kind == LogRecordKind.ScopeEnd).Elapsed.TotalMilliseconds, Is.EqualTo(40).Within(0.001));
             Assert.That(records.Select(r => r.Suppressed), Has.Member(3));
             Assert.That(records.Select(r => r.Thread).Distinct().Count(), Is.EqualTo(2));
@@ -158,7 +159,7 @@ namespace Tutan.Logging.Tests
         {
             string[] lines = Write(store => store.Log.Failed(3, Thrown())).Lines;
 
-            MemoryRecord failed = Records(Read(lines).Archive).Single();
+            MemoryRecord failed = Held.Records(Read(lines).Archive).Single();
 
             Assert.That(failed.Field("Error"), Is.InstanceOf<ArchivedException>());
             var exception = (ArchivedException)failed.Field("Error")!;
@@ -183,7 +184,7 @@ namespace Tutan.Logging.Tests
 
             Assert.That(file.Skipped, Is.Empty);
             Assert.That(file.Archive.Redacted, Is.EqualTo(LogRedaction.Personal));
-            MemoryRecord[] records = Records(file.Archive);
+            MemoryRecord[] records = Held.Records(file.Archive);
             Assert.That(records.Select(r => r.Message), Is.EqualTo(new[] { "Signed in as [personal] from C:/Saves", "Lost [personal]" }));
             Assert.That(records[0].Field("Email"), Is.EqualTo("[personal]"));
             Assert.That(records[1].Field("Error"), Is.EqualTo("[personal]"));
@@ -205,7 +206,7 @@ namespace Tutan.Logging.Tests
 
             Assert.That(again.Skipped, Is.Empty);
             Assert.That(again.Archive.Redacted, Is.EqualTo(LogRedaction.Personal), "What the first file left out, the second never had.");
-            Assert.That(Records(again.Archive).Single().Message, Is.EqualTo("Signed in as [personal] from C:/Saves"));
+            Assert.That(Held.Records(again.Archive).Single().Message, Is.EqualTo("Signed in as [personal] from C:/Saves"));
         }
 
         [Test]
@@ -219,7 +220,7 @@ namespace Tutan.Logging.Tests
 
             LogArchive archive = Read(lines).Archive;
 
-            Assert.That(Records(archive).Single().Sequence, Is.EqualTo(2));
+            Assert.That(Held.Records(archive).Single().Sequence, Is.EqualTo(2));
             Assert.That(archive.Events.Single().Key, Is.EqualTo("tests.save/Failed"));
             Assert.That((archive.First, archive.Next), Is.EqualTo((2L, 3L)));
         }
@@ -236,7 +237,7 @@ namespace Tutan.Logging.Tests
 
             LogSessionFile file = Read(text.Substring(0, text.Length - 10));
 
-            Assert.That(Records(file.Archive).Select(r => r.Message), Is.EqualTo(new[] { "Saved slot 1 as A.sav" }));
+            Assert.That(Held.Records(file.Archive).Select(r => r.Message), Is.EqualTo(new[] { "Saved slot 1 as A.sav" }));
             LogSkippedLine skipped = file.Skipped.Single();
             Assert.That(skipped.Line, Is.EqualTo(lines.Length));
             Assert.That(skipped.Reason, Is.InstanceOf<LogSkipReason.NotJson>());
@@ -272,7 +273,7 @@ namespace Tutan.Logging.Tests
                 "{\"what\":1}",
             });
 
-            Assert.That(Records(file.Archive).Select(r => r.Sequence), Is.EqualTo(new[] { 1L, 8L }));
+            Assert.That(Held.Records(file.Archive).Select(r => r.Sequence), Is.EqualTo(new[] { 1L, 8L }));
             Assert.That(file.Skipped.Select(s => (s.Line, s.Reason.GetType())), Is.EqualTo(new[]
             {
                 (2, typeof(LogSkipReason.Undeclared)),
@@ -359,7 +360,7 @@ namespace Tutan.Logging.Tests
 
             LogSessionFile file = Read(new[] { lines[0], lines[1], lines[2].Replace("\"lvl\":\"Information\"", "\"lvl\":\"Error\""), lines[3] });
 
-            Assert.That(Records(file.Archive).Select(r => r.Sequence), Is.EqualTo(new[] { 2L }));
+            Assert.That(Held.Records(file.Archive).Select(r => r.Sequence), Is.EqualTo(new[] { 2L }));
             Assert.That(file.Skipped.Single().Reason, Is.EqualTo(new LogSkipReason.NotItsDeclaration("tests.save/Saved",
                 "it is at Error, and its declaration says every record of it is at Information")));
         }
@@ -383,7 +384,7 @@ namespace Tutan.Logging.Tests
                 saved.Replace("\"seq\":1,", "\"seq\":4,").Replace("tests.save/Saved", "tests.save/Wrote"),
             });
 
-            Assert.That(Records(file.Archive).Select(r => r.Message), Is.EqualTo(new[] { "Saved slot 3 as A.sav", "Kept A.sav in slot 3" }));
+            Assert.That(Held.Records(file.Archive).Select(r => r.Message), Is.EqualTo(new[] { "Saved slot 3 as A.sav", "Kept A.sav in slot 3" }));
             Assert.That(file.Archive.Events.Select(e => e.Key), Is.EqualTo(new[] { "tests.save/Saved", "tests.save/Saved" }));
             Assert.That(file.Skipped, Is.EqualTo(new[]
             {
@@ -415,7 +416,7 @@ namespace Tutan.Logging.Tests
             LogSessionFile file = Read(lines);
 
             Assert.That(file.Skipped, Is.Empty);
-            LogEventSpec[] written = Records(store).Select(r => r.Event).Distinct().ToArray();
+            LogEventSpec[] written = Held.Records(store).Select(r => r.Event).Distinct().ToArray();
             Assert.That(file.Archive.Events.Count, Is.EqualTo(written.Length));
             for (int i = 0; i < written.Length; i++)
             {
@@ -483,7 +484,7 @@ namespace Tutan.Logging.Tests
 
             Assert.That(file.Skipped, Is.EqualTo(new[] { new LogSkippedLine(line + 1, new LogSkipReason.NotAStamp(named)) }));
             Assert.That(file.Skipped[0].ToString(), Is.EqualTo($"Line {line + 1} is a record whose {named} is not one a record can have"));
-            Assert.That(Records(file.Archive), Has.Length.EqualTo(2));
+            Assert.That(Held.Records(file.Archive), Has.Length.EqualTo(2));
         }
 
         [Test]
@@ -616,7 +617,7 @@ namespace Tutan.Logging.Tests
             LogSessionFile file = Read(lines[0] + end + (end.Length > 0 ? string.Join("\n", lines, 1, lines.Length - 1) + "\n" : ""));
 
             Assert.That(file.Skipped, Is.Empty);
-            Assert.That(Records(file.Archive).Select(r => r.Message), Is.EqualTo(end.Length > 0 ? new[] { "Saved slot 3 as A.sav" } : Array.Empty<string>()));
+            Assert.That(Held.Records(file.Archive).Select(r => r.Message), Is.EqualTo(end.Length > 0 ? new[] { "Saved slot 3 as A.sav" } : Array.Empty<string>()));
         }
 
         [Test]
@@ -624,13 +625,18 @@ namespace Tutan.Logging.Tests
         {
             (LogStore written, string[] lines) = Write(store => store.Log.Saved(3, "A.sav"));
             LogArchive archive = Read(lines).Archive;
+            LogEventSpec[] declared = archive.Events.ToArray();
             LogBatch records = All(written);
 
             Assert.That(() => archive.Keep(records[0], backlog: false),
-                Throws.InvalidOperationException.With.Message.EqualTo("A file's archive holds what its file held, and takes no record after."));
+                Throws.InvalidOperationException.With.Message.EqualTo(
+                    "The archive is sealed: it holds what its file held, or what its session kept before it ended, and takes no record after."));
             Assert.That(() => Step(archive, 9), Throws.InvalidOperationException);
             Assert.That(() => archive.Lose(1), Throws.InvalidOperationException);
-            Assert.That(archive.Events, Is.EqualTo(new[] { SaveLog.Events.Saved }), "Refusing changed nothing.");
+            // The file's own specs, which are not the program's, though they have its keys.
+            Assert.That(archive.Events, Is.EqualTo(declared), "Refusing changed nothing.");
+            Assert.That(declared.Select(e => e.Key), Is.EqualTo(new[] { SaveLog.Events.Saved.Key }));
+            Assert.That(declared, Has.None.SameAs(SaveLog.Events.Saved));
             Assert.That(archive.Count, Is.EqualTo(1));
         }
 
@@ -657,7 +663,7 @@ namespace Tutan.Logging.Tests
             LogSessionFile file = LogFile.Read(sink.Name).Match(error => throw new InvalidOperationException(error.Message), read => read);
 
             Assert.That(file.Path, Is.EqualTo(sink.Name));
-            Assert.That(Records(file.Archive).Select(r => r.Message), Is.EqualTo(new[] { "Saved slot 3 as A.sav" }));
+            Assert.That(Held.Records(file.Archive).Select(r => r.Message), Is.EqualTo(new[] { "Saved slot 3 as A.sav" }));
         }
 
         [Test]
@@ -803,6 +809,54 @@ namespace Tutan.Logging.Tests
             Assert.Throws<ArgumentOutOfRangeException>(() => archive.Lose(-1));
         }
 
+        [Test]
+        public void Clearing_an_archive_lets_every_record_go_and_it_takes_none_older()
+        {
+            var archive = new LogArchive("Tests", default, cap: 4);
+            for (long sequence = 1; sequence <= 6; sequence++)
+                Step(archive, sequence);
+            archive.Lose(3);
+
+            archive.Clear();
+
+            Assert.That((archive.Count, archive.Dropped, archive.PendingLost, archive.First, archive.Next), Is.EqualTo((0, 0L, 0L, 7L, 7L)),
+                "It stops where it was; what it dropped, and the loss, were before the clear.");
+            Assert.That(archive.CanKeep(6), Is.False);
+            Assert.That(Step(archive, 6), Is.False, "A record older than the clear went with it.");
+            Assert.That(Step(archive, 8), Is.True);
+            Assert.That(Step(archive, 7), Is.True, "A record after the clear, handed late, is placed.");
+            var batch = new LogBatch();
+            Assert.That(archive.Read(1, batch), Is.EqualTo(new LogRead(7, 2, 9, 0)));
+            Assert.That(archive.LateMark.Placed, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void A_full_archive_does_not_keep_a_record_older_than_all_it_holds()
+        {
+            var archive = new LogArchive("Tests", default, cap: 4);
+            foreach (long sequence in new long[] { 2, 4, 6, 8 })
+                Step(archive, sequence);
+
+            Assert.That(archive.CanKeep(1), Is.False, "Its cap would let it go first, with the newer records of its block.");
+            Assert.That(Step(archive, 1), Is.False);
+            Assert.That(archive.CanKeep(3), Is.True);
+            Assert.That(archive.CanKeep(4), Is.False, "It holds it.");
+            Assert.That((archive.Count, archive.Dropped), Is.EqualTo((4, 0L)));
+        }
+
+        [Test]
+        public void A_sealed_archive_keeps_nothing_and_is_not_cleared()
+        {
+            var archive = new LogArchive("Tests", default, cap: 100);
+            Step(archive, 1);
+
+            archive.Seal();
+
+            Assert.That(archive.CanKeep(2), Is.False);
+            Assert.That(() => archive.Clear(), Throws.InvalidOperationException);
+            Assert.That((archive.Count, archive.Capacity), Is.EqualTo((1, 1)));
+        }
+
         private static InvalidDataException Thrown()
         {
             try
@@ -855,25 +909,6 @@ namespace Tutan.Logging.Tests
                 Bits = 1,
             };
             return archive.Add(entry, new[] { sequence }, Array.Empty<object?>());
-        }
-
-        /// <summary>Every record <paramref name="records"/> hold, as a memory sink keeps them.</summary>
-        private static MemoryRecord[] Records(LogRecords records)
-        {
-            var memory = new MemorySink();
-            var context = new LogContext(records, new LogSinkOptions(LogLevel.Trace), new ScopeTable());
-            var batch = new LogBatch();
-            for (long from = records.First; from < records.Next;)
-            {
-                LogRead read = records.Read(from, batch);
-                for (int i = 0; i < batch.Count; i++)
-                    memory.Write(batch[i], batch[i].IsBacklog, context);
-                if (read.Count == 0)
-                    break;
-                from = read.Next;
-            }
-
-            return memory.Records.ToArray();
         }
     }
 }

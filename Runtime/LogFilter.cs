@@ -663,6 +663,8 @@ namespace Tutan.Logging
     /// </remarks>
     internal sealed class FilterPass
     {
+        private static readonly ReadOnlyCollection<LogFilterTerm> s_noneGaveUp = Array.AsReadOnly(Array.Empty<LogFilterTerm>());
+
         // By a term's place, the sequence from which it matches nothing: long.MaxValue while it has not given up.
         private readonly long[] _gaveUpFrom;
 
@@ -719,7 +721,7 @@ namespace Tutan.Logging
             }
 
             if (count == 0)
-                return Array.Empty<LogFilterTerm>();
+                return s_noneGaveUp;
 
             var terms = new LogFilterTerm[count];
             int listed = 0;
@@ -1004,7 +1006,7 @@ namespace Tutan.Logging
                 char[] message = Message(record, out int written);
                 try
                 {
-                    return Met(new ReadOnlySpan<char>(message, 0, written).IndexOf(Value.AsSpan(), StringComparison.OrdinalIgnoreCase) >= 0);
+                    return Met(IgnoringCase.Holds(message.AsSpan(0, written), Value.AsSpan()));
                 }
                 finally
                 {
@@ -1359,7 +1361,7 @@ namespace Tutan.Logging
             int resume = 0;
             while (t < text.Length)
             {
-                if (p < pattern.Length && (pattern[p] == '?' || Same(pattern[p], text[t])))
+                if (p < pattern.Length && (pattern[p] == '?' || IgnoringCase.Same(pattern[p], text[t])))
                 {
                     p++;
                     t++;
@@ -1385,7 +1387,5 @@ namespace Tutan.Logging
 
             return p == pattern.Length;
         }
-
-        private static bool Same(char a, char b) => a == b || char.ToUpperInvariant(a) == char.ToUpperInvariant(b);
     }
 }

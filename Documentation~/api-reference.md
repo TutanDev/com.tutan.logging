@@ -349,6 +349,16 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `const int Format` | The format's version, 1 |
 | `void Dispose()` | Flushes, and disposes the stream unless left open |
 
+### `LogConsoleSink` (`ILogSink`, `IDisposable`)
+
+| Member | Description |
+|---|---|
+| `LogConsoleSink(int cap = DefaultCap, string name = "log console")` | A sink that keeps a session of the log console, of at most `cap` records; a `cap` below 1 throws `ArgumentOutOfRangeException` |
+| `const int DefaultCap` | 1,000,000 |
+| `int Cap` | The most records its session holds |
+| `void Open(LogContext context)` | Starts its session, in the editor only; opening it again throws `InvalidOperationException`, and options that redact throw `ArgumentException` |
+| `void Dispose()` | Ends its session, which stays until the console is cleared; opening it after throws `ObjectDisposedException` |
+
 ### `LogFile` (static)
 
 | Member | Description |
@@ -447,14 +457,16 @@ A `LogStore` or a `LogArchive`, and nothing else.
 ### `LogArchive` (`LogRecords`)
 
 A session's records, held after the store that wrote them has moved on.
-`LogFile.Read` makes one from a file.
+A console sink keeps one for its session, and `LogFile.Read` makes one from a file.
 
 | Member | Description |
 |---|---|
 | `int Count` | How many records it holds |
-| `long Dropped` | How many of its oldest it let go to stay under its cap |
+| `long Dropped` | How many of its oldest it let go to stay under its cap, since it was last cleared |
 
-A file's archive holds what the file held, and takes nothing after.
+A console's `Clear` lets every record go: `First` and `Next` are then where it stopped, and it takes no record older.
+A record older than what it let go is let go too, and so is one older than all it holds while it is full.
+A file's archive, and an ended session's, hold what they held, and take nothing after.
 
 ### `LogLateMark` (readonly record struct)
 
@@ -560,6 +572,37 @@ The levels or frames a filter keeps, both ends kept: `All` (the `default`), `Emp
 ### `LogFilterError`
 
 `NotATerm`, `NotALevel`, `NotAFrame`, `NotAScope`, `NotAThread`, `NoText`, `NoValue`, `QuoteNotClosed`, `CannotLeaveOut`, `RegexNotClosed`, `NotARegex`: the `Error.Code` of a failed `Parse`.
+
+## Console sessions
+
+### `LogConsole` (static)
+
+| Member | Description |
+|---|---|
+| `static IReadOnlyList<LogConsoleSession> Sessions` | The process's sessions, oldest first: a new list each time one starts, ends, is opened, is closed or is cleared away |
+| `static Optional<LogConsoleSession> Find(LogSessionId id)` | The session as it is now, while it is one of them |
+| `static LogConsoleSession.File Open(LogSessionFile file)` | Adds a file's session; the one it is already, when it was opened before |
+| `static void Close(LogConsoleSession.Ended session)` | Lets an ended session go; does nothing when it is gone already |
+| `static void Close(LogConsoleSession.File session)` | Lets a file's session go; does nothing when it is gone already |
+| `static void Clear()` | Lets ended sessions go and empties live ones; files' sessions stay |
+
+### `LogConsoleSession` (abstract record)
+
+| Member | Description |
+|---|---|
+| `LogSessionId Id` | Which session it is, whatever its state |
+| `LogArchive Records` | Its records, which a `LogView` reads |
+| `R Match<R>(Func<Live, R> live, Func<Ended, R> ended, Func<File, R> file)` | What the function for its state makes of it |
+
+Its cases are its states:
+
+- `Live`: kept by a console sink; its `Records.Capacity` is the sink's cap.
+- `Ended`: its drain let its sink go, or its sink threw; `DateTimeOffset At` is when, and its records take nothing after.
+- `File`: read back from a file; `string Path` and `IReadOnlyList<LogSkippedLine> Skipped` are its file's.
+
+### `LogSessionId` (readonly record struct)
+
+`long Value`: numbered from 1, in the order the process's sessions started or were opened; `default` is no session.
 
 ## Unity
 

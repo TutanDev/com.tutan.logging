@@ -158,10 +158,13 @@ namespace Tutan.Logging
         /// <exception cref="ObjectDisposedException">The drain was disposed.</exception>
         public void Pump()
         {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(LogDrain), "The drain was disposed, and has nothing left to read into.");
+            lock (_draining)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(LogDrain), "The drain was disposed, and has nothing left to read into.");
 
-            Drain();
+                Drain();
+            }
         }
 
         /// <summary>
@@ -171,22 +174,31 @@ namespace Tutan.Logging
         /// </summary>
         public void Flush()
         {
-            if (!_disposed)
-                Drain();
+            lock (_draining)
+            {
+                if (!_disposed)
+                    Drain();
+            }
         }
 
-        /// <summary>Drains and flushes what is left, and disposes the sinks.</summary>
+        /// <summary>
+        /// Drains and flushes what is left, and disposes the sinks: under the lock a pump or a flush
+        /// takes, so one on another thread never writes to a sink as it is disposed.
+        /// </summary>
         public void Dispose()
         {
-            if (_disposed)
-                return;
-
-            Drain();
-            _disposed = true;
-            foreach (Sink sink in _sinks)
+            lock (_draining)
             {
-                if (sink.Target is IDisposable)
-                    Guard(sink, static (s, _) => ((IDisposable)s.Target).Dispose(), 0);
+                if (_disposed)
+                    return;
+
+                Drain();
+                _disposed = true;
+                foreach (Sink sink in _sinks)
+                {
+                    if (sink.Target is IDisposable)
+                        Guard(sink, static (s, _) => ((IDisposable)s.Target).Dispose(), 0);
+                }
             }
         }
 

@@ -70,6 +70,29 @@ namespace Tutan.Logging.Tests
         }
     }
 
+    /// <summary>What records hold, read as a memory sink keeps them.</summary>
+    internal static class Held
+    {
+        /// <summary>Every record <paramref name="records"/> hold, the oldest first, with what they lack left out, as a memory sink keeps them.</summary>
+        public static MemoryRecord[] Records(LogRecords records)
+        {
+            var memory = new MemorySink();
+            var context = new LogContext(records, new LogSinkOptions(LogLevel.Trace), new ScopeTable());
+            var batch = new LogBatch();
+            for (long from = records.First; from < records.Next;)
+            {
+                LogRead read = records.Read(from, batch);
+                for (int i = 0; i < batch.Count; i++)
+                    memory.Write(batch[i], batch[i].IsBacklog, context);
+                if (read.Count == 0)
+                    break;
+                from = read.Next;
+            }
+
+            return memory.Records.ToArray();
+        }
+    }
+
     internal static class MemoryRecords
     {
         /// <summary>The records of <paramref name="spec"/>: what a test asserts on, whatever else a store said.</summary>

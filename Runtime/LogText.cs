@@ -189,7 +189,7 @@ namespace Tutan.Logging
                     return false;
                 if (a is '/' or '\\' && b is '/' or '\\')
                     continue;
-                if (char.ToUpperInvariant(a) != char.ToUpperInvariant(b))
+                if (!IgnoringCase.Same(a, b))
                     return false;
             }
 

@@ -36,6 +36,7 @@ First version: a structured log for Unity, ported from the design of FunctionalR
 - **`LogDrain` and `ILogSink`:** the drain reads the store when pumped and hands records to its sinks in sequence order.
   `LogSinkOptions` sets each sink's least level, its backlog (the latest records below that level sharing an error's scope, written before the error as context) and its redaction (`Personal`, `HomeFolder`).
   A sink that throws is reported once and not written to again.
+  Pumping, flushing and disposing take one lock, so a flush on another thread never writes to a sink as the drain disposes it.
 - **`UnityConsoleSink`:** one Console row per record with the category in brackets, message, rate-limit count, enclosing scope, frame, and a hyperlink to the call site mapped to the path Unity opens.
   Rows are written without a stack trace.
   `callSiteLine: false` leaves out the second line, the call site and frame.
@@ -46,7 +47,8 @@ First version: a structured log for Unity, ported from the design of FunctionalR
 - **`LogRecords`:** what a reader reads by sequence, a live `LogStore` or a session's `LogArchive` and nothing else, with `Redacted` saying what its records lack, and `LateMark` and `LateFrom` saying where records were placed after later ones, with the mark to pass next, as one `LogLate`.
 - **`LogArchive`:** a session's records, held in sequence order up to a cap, letting the oldest go a block at a time (`Dropped`), and placing a record handed late, as an error's backlog is, by its sequence.
   A read says records were lost only where it was told so.
-  A file's archive holds what the file held and takes nothing after.
+  A console's clear lets every record go, and it takes nothing older after; a record older than all it holds while it is full is let go too.
+  A file's archive, and an ended session's, hold what they held and take nothing after.
 - **`LogFile.Read`:** reads back a file a `JsonLinesSink` wrote, as far as it goes, even while a session still writes it, into a `LogSessionFile` of its `LogArchive` and the lines it skipped.
   A line it cannot read is skipped with a `LogSkipReason` that says why, and the rest is read.
   It fails with a `LogFileReadError` code only when the file cannot be read, is not a log, or is of another format.
@@ -63,9 +65,17 @@ First version: a structured log for Unity, ported from the design of FunctionalR
   A new filter is scanned over several updates while the rows stay as they were.
   A regular expression that took too long over a record matches nothing in the rows from that record on, `GaveUp` says which did, and `Retry` tries them afresh.
   `Find` keeps a selection by sequence, and `Read` and `Write` copy rows or write every record they stand for to a sink, which leaves out what the records already lack and what the rows leave out.
+- **`LogConsoleSink`:** keeps every record its drain hands it, whole, in a live session of the log console, up to a cap (a million records by default), past which it lets the oldest go a block at a time.
+  A record under scopes whose openings were below the sink's level is kept after those openings, read from the drain, so every record it keeps says what it is under.
+  Its options redact nothing: options that do are refused when it is opened, and the drain says so as `log/SinkFailed`.
+  A sink keeps one session, its session ends when its drain disposes it or when it throws, and outside the editor it keeps nothing.
+  Past its cap it reuses the block it let go, so keeping records in order allocates nothing once warm.
+- **`LogConsole`:** the process's console sessions, oldest first, as a new read-only list each time one starts, ends, is opened from a file, is closed, or is cleared away.
+  `Find` says a session's state now by its id, `Open` adds a file's session, `Close` takes an ended or a file's session and lets it go, and `Clear` lets ended sessions go and empties live ones, which keep what they are handed after.
+- **`LogConsoleSession` and `LogSessionId`:** a session is `Live`, `Ended` (when its drain let its sink go, with `At`) or `File` (with its `Path` and `Skipped` lines), each with its id and the `LogArchive` a view reads, and `Match` takes a function for each.
 - **`LogScopes`:** what is under what, as the records a view has read say, with each scope's parent, whether it is open, and how long it was.
 - **`LogRecord.IsBacklog`:** whether a sink was handed the record as an error's backlog.
 - **`LogPump`:** installs a frame stamp at the start of `EarlyUpdate` and the drain pump at the end of `PostLateUpdate`, and removes itself when Play Mode ends.
 - **`UnityLogBridge`:** brings `Application.logMessageReceivedThreaded` into a store as `unity/Logged`, at the level its `LogType` maps to, skipping what the Console sink writes.
 - **The package's own events**, in category `log`: `DrainFellBehind`, `SinkFailed`, `KeyTaken`, `CategoryTaken` and `RuleMatchesNothing`.
-- **Tests:** an Edit Mode suite in `Tests/Editor` covering the store, rules, scopes, every field kind, the catalog, the drain, both sinks, the file, redaction, path mapping, the bridge, the pump, allocation-free writing, the archive, reading a file back, scopes, filters and the view, plus xunit tests of the generator in `Generators~`.
+- **Tests:** an Edit Mode suite in `Tests/Editor` covering the store, rules, scopes, every field kind, the catalog, the drain, both sinks, the file, redaction, path mapping, the bridge, the pump, allocation-free writing, the archive, reading a file back, scopes, filters and the view, the console's sessions, plus xunit tests of the generator in `Generators~`.

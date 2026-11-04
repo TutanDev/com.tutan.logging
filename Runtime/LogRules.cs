@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text;
 using Tutan.Functional;
@@ -14,6 +15,7 @@ namespace Tutan.Logging
     public sealed class LogRules : IEquatable<LogRules>
     {
         private readonly LogRule[] _rules;
+        private readonly ReadOnlyCollection<LogRule> _ruleList;
 
         /// <summary>Rules holding every event to <paramref name="least"/>, but where <paramref name="rules"/> say otherwise.</summary>
         /// <param name="least">The least level captured where no rule says otherwise.</param>
@@ -30,6 +32,8 @@ namespace Tutan.Logging
                 if (rule is null)
                     throw new ArgumentNullException(nameof(rules), "One of the rules is null.");
             }
+
+            _ruleList = Array.AsReadOnly(_rules);
         }
 
         /// <summary>
@@ -42,7 +46,7 @@ namespace Tutan.Logging
         public LogLevel Least { get; }
 
         /// <summary>The rules, in the order they were given.</summary>
-        public IReadOnlyList<LogRule> Rules => _rules;
+        public IReadOnlyList<LogRule> Rules => _ruleList;
 
         /// <summary>
         /// Rules from their text: items separated by <c>;</c>, of which one may be a bare level, the
@@ -333,7 +337,7 @@ namespace Tutan.Logging
             if (pattern.EndsWith(".*", StringComparison.Ordinal))
             {
                 ReadOnlySpan<char> prefix = pattern.AsSpan(0, pattern.Length - 2);
-                bool under = spec.Category.AsSpan().StartsWith(prefix, StringComparison.Ordinal)
+                bool under = spec.Category.AsSpan().StartsWith(prefix)
                     && (spec.Category.Length == prefix.Length || spec.Category[prefix.Length] == '.');
                 return under ? 1 + prefix.Length : -1;
             }

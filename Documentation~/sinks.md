@@ -1,6 +1,6 @@
 # Sinks
 
-A sink is where records leave the program: the Unity Console, a file, or memory for a test.
+A sink is where records leave the program: the Unity Console, the log console, a file, or memory for a test.
 Sinks never read the store; a drain reads it and hands every record to each of its sinks, which write the ones their options let through.
 
 ## The drain
@@ -140,6 +140,43 @@ One JSON object per line, UTF-8 without a byte order mark:
 - `{"lost":N}` says N records were overwritten before the drain read them.
 
 Its buffers are reused for each line, so writing allocates nothing once they have grown, but for an exception's text.
+
+## Log console
+
+```csharp
+var drain = new LogDrain(store,
+    (new UnityConsoleSink(), new LogSinkOptions(LogLevel.Warning)),
+    (new LogConsoleSink(), new LogSinkOptions(LogLevel.Debug)));
+```
+
+`LogConsoleSink` keeps a session for the log console: every record its drain hands it, whole and typed, in a live session of `LogConsole.Sessions`.
+The session starts when the drain opens the sink, and ends when the drain disposes it.
+An ended session stays until the console is cleared, so a Play Mode session can be read after Play Mode exits.
+
+- A session holds at most `cap` records, a million by default, and past that lets the oldest go a block at a time, which its `Records.Dropped` counts.
+  So it keeps what was written since the last clear, not only what the store's rings still hold.
+- A record under a scope whose opening was below the sink's level is kept after that opening, so it still says what it is under.
+  Such a scope's closing is below the level too, so the session shows the scope as open.
+- It keeps records whole, so its options redact nothing: options that do are refused when it is opened, and the drain says so as `log/SinkFailed`.
+- A sink keeps one session, so a sink given to a second drain fails there.
+- A sink that throws is written to no more, so its session ends then, as when its drain lets it go.
+- Outside the editor it keeps nothing, since no window can read a session, so a composition root can add it without an `#if`.
+- A `cap` below 1 throws `ArgumentOutOfRangeException`.
+
+`LogConsole` is the process's sessions.
+
+| Member | What it does |
+|---|---|
+| `Sessions` | The sessions, oldest first: a new read-only list each time one starts, ends, is opened, is closed or is cleared away |
+| `Find(id)` | A session's state now, by its `LogSessionId`, while it is one of them |
+| `Open(file)` | Adds the session of a file `LogFile.Read` read, once |
+| `Close(session)` | Lets an ended session or a file's go; a live one has no `Close`, since it ends when its drain lets its sink go |
+| `Clear()` | Lets ended sessions go, and empties live ones, which keep what they are handed after; files' sessions stay |
+
+A `LogConsoleSession` is `Live`, `Ended` (with `At`, when it ended) or `File` (with its `Path` and `Skipped` lines), and its `Match` takes a function for each.
+Every one has an `Id` and its `Records`, a `LogArchive` that a `LogView` reads as it reads a store (see [Reading Records](reading.md)).
+A session's state never changes in place: when a live session ends, `Sessions` is a new list with an `Ended` under the same id where it was.
+A domain reload lets every session go.
 
 ## Memory, for tests
 
