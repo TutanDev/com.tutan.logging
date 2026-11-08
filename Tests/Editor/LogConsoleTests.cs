@@ -161,6 +161,9 @@ namespace Tutan.Logging.Tests
             Assert.That(sessions.Sessions.Select(s => (s.Id.Value, State(s))), Is.EqualTo(new[] { (1L, "ended"), (2L, "live") }));
             Assert.That(sessions.Find(both[1].Id), Is.EqualTo(F.Some(both[1])));
             Assert.That(sessions.Find(default).IsNone, Is.True, "The default id is no session.");
+            Assert.That((both[1].Id > both[0].Id, both[0].Id < both[1].Id, both[1].Id >= both[0].Id, both[1].Id <= both[0].Id),
+                Is.EqualTo((true, true, true, false)), "A session that started later has the greater id.");
+            Assert.That(both[1].Id.CompareTo(both[0].Id), Is.Positive);
         }
 
         [Test]

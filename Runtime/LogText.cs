@@ -4,7 +4,7 @@ using System.IO;
 
 namespace Tutan.Logging
 {
-    /// <summary>The small steps every formatter here is made of: copy, append, align, redact.</summary>
+    /// <summary>The small steps every formatter and message here is made of: copy, append, align, redact, close.</summary>
     internal static class LogText
     {
         /// <summary>What a sink that redacts personal fields writes in place of one.</summary>
@@ -198,6 +198,19 @@ namespace Tutan.Logging
 
             char next = text[s_home.Length];
             return !(char.IsLetterOrDigit(next) || next is '_' or '-' or '.');
+        }
+
+        /// <summary>
+        /// <paramref name="clause"/> closed, so more can follow it: without the white space at its end, and with
+        /// a full stop unless it then ends in one or in a question or exclamation mark, so it is closed once
+        /// however often it is closed; a clause that is empty or only white space is closed as nothing. An
+        /// error's message may end in words taken from elsewhere, as an exception's, closed or not: whoever adds
+        /// text after one closes it with this, never with a full stop of its own.
+        /// </summary>
+        public static string Closed(string clause)
+        {
+            string trimmed = clause.TrimEnd();
+            return trimmed.Length == 0 || trimmed[trimmed.Length - 1] is '.' or '?' or '!' ? trimmed : trimmed + ".";
         }
     }
 }

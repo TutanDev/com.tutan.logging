@@ -95,7 +95,7 @@ namespace Tutan.Logging
                 return NotALog(file);
             if (format != JsonLinesSink.Format)
             {
-                return F.Error($"{file} is a log of format {format}, and this reader reads format {JsonLinesSink.Format}",
+                return F.Error($"{file} is a log of format {format.ToString(CultureInfo.InvariantCulture)}, and this reader reads format {JsonLinesSink.Format.ToString(CultureInfo.InvariantCulture)}",
                     (int)LogFileReadError.UnknownFormat);
             }
 
@@ -209,7 +209,7 @@ namespace Tutan.Logging
         {
             DeclarationError.NotADeclaration => new LogSkipReason.NotADeclaration(key, why.Message),
             DeclarationError.NotAnEvent => new LogSkipReason.NotAnEvent(key, why.Message),
-            _ => throw new InvalidOperationException($"A declaration was refused with the code {why.Code}, which is no {nameof(DeclarationError)}."),
+            _ => throw new InvalidOperationException($"A declaration was refused with the code {why.Code.ToString(CultureInfo.InvariantCulture)}, which is no {nameof(DeclarationError)}."),
         };
 
         /// <summary>
@@ -369,7 +369,7 @@ namespace Tutan.Logging
             LogEventSpec spec = declared.Spec;
             if (!string.Equals(spec.Key, key, StringComparison.Ordinal))
             {
-                Skip(number, new LogSkipReason.NotItsDeclaration(key, $"the declaration it names, event {id}, declares {spec.Key}"));
+                Skip(number, new LogSkipReason.NotItsDeclaration(key, $"the declaration it names, event {id.ToString(CultureInfo.InvariantCulture)}, declares {spec.Key}"));
                 return;
             }
 

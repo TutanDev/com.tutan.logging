@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace Tutan.Logging
 {
@@ -23,7 +24,7 @@ namespace Tutan.Logging
         public LogBatch(int records = 1024)
         {
             if (records < 1)
-                throw new ArgumentOutOfRangeException(nameof(records), $"A batch holds at least 1 record, and {records} were asked for.");
+                throw new ArgumentOutOfRangeException(nameof(records), $"A batch holds at least 1 record, and {records.ToString(CultureInfo.InvariantCulture)} were asked for.");
 
             _entries = new LogEntry[records];
             _bits = new long[records * 8];
@@ -40,7 +41,7 @@ namespace Tutan.Logging
             get
             {
                 if ((uint)index >= (uint)_count)
-                    throw new ArgumentOutOfRangeException(nameof(index), $"The batch holds {_count} records, and {index} was asked for.");
+                    throw new ArgumentOutOfRangeException(nameof(index), $"The batch holds {_count.ToString(CultureInfo.InvariantCulture)} records, and {index.ToString(CultureInfo.InvariantCulture)} was asked for.");
 
                 return new LogRecord(this, index);
             }

@@ -42,6 +42,50 @@ namespace Tutan.Logging.Tests
             Assert.That(paths.Map("C:\\Game\\Assets\\A.cs"), Is.EqualTo("C:/Game/Assets/A.cs"));
         }
 
+        [Test]
+        public void Paths_are_refused_null()
+        {
+            Assert.Throws<System.ArgumentNullException>(() => new UnityPaths(null!, new (string, string)[0]));
+            Assert.Throws<System.ArgumentNullException>(() => new UnityPaths("D:/Game", null!));
+            Assert.Throws<System.ArgumentNullException>(() => new UnityPaths("D:/Game", new[] { ((string)null!, "com.a") }));
+            Assert.Throws<System.ArgumentNullException>(() => new UnityPaths("D:/Game", new[] { ("D:/Game/a", (string)null!) }));
+            Assert.Throws<System.ArgumentNullException>(() => s_paths.Map(null!));
+            Assert.Throws<System.ArgumentNullException>(() => UnityPaths.FileName(null!));
+        }
+
+        [Test]
+        public void Paths_are_matched_ignoring_case_when_asked_and_by_case_else()
+        {
+            // As on Windows and macOS, whose file systems ignore case, and as on Linux, whose file systems keep it.
+            var packages = new[] { ("D:/Game/Packages/outer", "com.outer") };
+            var windows = new UnityPaths("D:/Game", packages, ignoreCase: true);
+            var unix = new UnityPaths("D:/Game", packages, ignoreCase: false);
+
+            Assert.That(windows.Map("d:/game/Assets/A.cs"), Is.EqualTo("Assets/A.cs"));
+            Assert.That(windows.Map("D:/GAME/packages/OUTER/B.cs"), Is.EqualTo("Packages/com.outer/B.cs"));
+            Assert.That(windows.Map("d:/game/library/packagecache/com.unity.ugui@2.0.0/Runtime/C.cs"), Is.EqualTo("Packages/com.unity.ugui/Runtime/C.cs"));
+            Assert.That(unix.Map("d:/game/Assets/A.cs"), Is.EqualTo("d:/game/Assets/A.cs"));
+            Assert.That(unix.Map("D:/GAME/packages/OUTER/B.cs"), Is.EqualTo("D:/GAME/packages/OUTER/B.cs"));
+            Assert.That(unix.Map("D:/Game/library/packagecache/com.unity.ugui@2.0.0/Runtime/C.cs"),
+                Is.EqualTo("library/packagecache/com.unity.ugui@2.0.0/Runtime/C.cs"));
+        }
+
+        [Test]
+        public void Of_two_packages_of_one_folder_the_first_listed_holds_its_paths()
+        {
+            var paths = new UnityPaths("D:/Game", new[] { ("D:/Game/Packages/one", "com.first"), ("D:/Game/Packages/one/", "com.second") });
+
+            Assert.That(paths.Map("D:/Game/Packages/one/A.cs"), Is.EqualTo("Packages/com.first/A.cs"));
+        }
+
+        [Test]
+        public void A_package_of_no_folder_or_no_name_is_refused()
+        {
+            Assert.Throws<System.ArgumentException>(() => new UnityPaths("D:/Game", new[] { ("", "com.a") }), "It would hold every path.");
+            Assert.Throws<System.ArgumentException>(() => new UnityPaths("D:/Game", new[] { ("  ", "com.a") }));
+            Assert.Throws<System.ArgumentException>(() => new UnityPaths("D:/Game", new[] { ("D:/Game/a", "") }));
+        }
+
         [TestCase("Assets/Scripts/Player.cs", "Player.cs")]
         [TestCase("Player.cs", "Player.cs")]
         public void A_files_name_is_what_follows_its_last_slash(string path, string name)

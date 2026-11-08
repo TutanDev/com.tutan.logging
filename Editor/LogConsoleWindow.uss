@@ -1,0 +1,385 @@
+/* The log console. Light theme by default; .dark is set on the root under the dark skin. */
+
+.log-console {
+    --secondary: #5C5C5C;
+    --link: #1D6FB8;
+    --trace: #7A7A7A;
+    --debug: #5E6B7A;
+    --information: #1D6FB8;
+    --warning: #8F6300;
+    --error: #C42B2B;
+    --critical: #FFFFFF;
+    --critical-back: #B3261E;
+    --mark: #1D6FB8;
+    --source-back: rgba(0, 0, 0, 0.06);
+    --current-line: rgba(229, 181, 59, 0.28);
+}
+
+.log-console.dark {
+    --secondary: #9A9A9A;
+    --link: #6CB4EE;
+    --trace: #7F7F7F;
+    --debug: #9AA4B1;
+    --information: #6CB4EE;
+    --warning: #E5B53B;
+    --error: #F26D6D;
+    --critical: #FFFFFF;
+    --critical-back: #B3261E;
+    --mark: #4FA3E0;
+    --source-back: rgba(0, 0, 0, 0.22);
+    --current-line: rgba(229, 181, 59, 0.18);
+}
+
+/* Toolbar */
+
+.session {
+    min-width: 160px;
+    -unity-text-align: middle-left;
+}
+
+.badge {
+    min-width: 44px;
+    opacity: 0.5;
+}
+
+.badge.on {
+    opacity: 1;
+}
+
+.badge.zero {
+    color: var(--secondary);
+}
+
+.badge.level-warning {
+    color: var(--warning);
+}
+
+.badge.level-error,
+.badge.level-critical {
+    color: var(--error);
+}
+
+.status {
+    -unity-text-align: middle-right;
+    padding: 0 6px;
+    color: var(--secondary);
+}
+
+/* The query line, and what is said under it */
+
+.query {
+    margin: 3px 4px 2px 4px;
+}
+
+.said-line {
+    flex-direction: row;
+    align-items: center;
+    padding: 1px 6px;
+}
+
+.said-line > Label {
+    flex-shrink: 1;
+    white-space: normal;
+}
+
+.said-line.error > Label {
+    color: var(--error);
+}
+
+.said-line.warning > Label {
+    color: var(--warning);
+}
+
+.said-line.info > Label {
+    color: var(--secondary);
+}
+
+.retry {
+    margin-left: 6px;
+}
+
+.panes {
+    flex-grow: 1;
+}
+
+/* Rows */
+
+.row {
+    flex-direction: row;
+    align-items: center;
+    height: 20px;
+    padding-left: 2px;
+}
+
+.row > Label {
+    margin: 0;
+    padding: 0 3px;
+    -unity-text-align: middle-left;
+    white-space: nowrap;
+}
+
+.row > .lost {
+    width: 16px;
+    color: var(--warning);
+}
+
+.row > .time {
+    width: 92px;
+    color: var(--secondary);
+}
+
+.row > .frame {
+    width: 52px;
+    -unity-text-align: middle-right;
+    color: var(--secondary);
+}
+
+.row > .level {
+    width: 36px;
+    -unity-font-style: bold;
+}
+
+.row > .fold {
+    width: 16px;
+    -unity-text-align: middle-center;
+}
+
+.row > .category {
+    max-width: 180px;
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row > .message {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row > .duration,
+.row > .repeats,
+.row > .suppressed {
+    color: var(--secondary);
+}
+
+.row.level-trace > .level,
+.row.level-trace > .message {
+    color: var(--trace);
+}
+
+.row.level-debug > .level {
+    color: var(--debug);
+}
+
+.row.level-information > .level {
+    color: var(--information);
+}
+
+.row.level-warning > .level,
+.row.level-warning > .message {
+    color: var(--warning);
+}
+
+.row.level-error > .level,
+.row.level-error > .message {
+    color: var(--error);
+}
+
+.row.level-critical > .level {
+    color: var(--critical);
+    background-color: var(--critical-back);
+    border-radius: 2px;
+}
+
+.row.level-critical > .message {
+    color: var(--error);
+    -unity-font-style: bold;
+}
+
+.row.scope > .message {
+    -unity-font-style: italic;
+}
+
+.row.context {
+    opacity: 0.7;
+}
+
+.row.gone > .message {
+    color: var(--secondary);
+    -unity-font-style: italic;
+}
+
+/* Categories */
+
+.category-item {
+    flex-direction: row;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px 0 4px;
+}
+
+.category-item > .mark {
+    width: 10px;
+    height: 10px;
+    margin-right: 5px;
+    flex-shrink: 0;
+    border-width: 1px;
+    border-radius: 2px;
+    border-color: var(--secondary);
+}
+
+.category-item > .mark.all {
+    background-color: var(--mark);
+    border-color: var(--mark);
+}
+
+.category-item > .mark.some {
+    background-color: rgba(79, 163, 224, 0.4);
+    border-color: var(--mark);
+}
+
+.category-item > .name {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0;
+}
+
+.category-item > .count {
+    color: var(--secondary);
+    padding: 0;
+    margin-left: 4px;
+}
+
+.category-item.hidden > .name {
+    opacity: 0.45;
+}
+
+/* Details */
+
+.details > .unity-scroll-view__content-viewport > .unity-scroll-view__content-container {
+    padding: 6px 8px;
+}
+
+.details Label {
+    white-space: normal;
+}
+
+.details .header {
+    flex-direction: row;
+    align-items: center;
+}
+
+.details .header > .level {
+    -unity-font-style: bold;
+    margin-right: 6px;
+}
+
+.details .header > .level.level-warning {
+    color: var(--warning);
+}
+
+.details .header > .level.level-error,
+.details .header > .level.level-critical {
+    color: var(--error);
+}
+
+.details .header > .level.level-information {
+    color: var(--information);
+}
+
+.details .key {
+    -unity-font-style: bold;
+    font-size: 13px;
+}
+
+.details .meta,
+.details .note,
+.details .hint {
+    color: var(--secondary);
+}
+
+.details .hint {
+    margin-top: 8px;
+}
+
+.details .message {
+    margin: 6px 0 2px 0;
+    font-size: 12px;
+}
+
+.details .section {
+    -unity-font-style: bold;
+    color: var(--secondary);
+    margin-top: 10px;
+    margin-bottom: 2px;
+}
+
+.details .field {
+    flex-direction: row;
+    align-items: flex-start;
+}
+
+.details .field-name {
+    width: 140px;
+    flex-shrink: 0;
+    color: var(--secondary);
+}
+
+.details .field-value {
+    flex-shrink: 1;
+}
+
+.details .tag {
+    margin-left: 6px;
+    padding: 0 4px;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: var(--secondary);
+    color: var(--secondary);
+}
+
+.details .link {
+    color: var(--link);
+    cursor: link;
+}
+
+.details .link:hover {
+    opacity: 0.75;
+}
+
+.details .frame {
+    color: var(--secondary);
+}
+
+.details .source {
+    margin: 4px 0;
+    padding: 4px 0;
+    background-color: var(--source-back);
+    border-radius: 3px;
+    cursor: link;
+}
+
+.details .source-line {
+    flex-direction: row;
+}
+
+.details .source-line.current {
+    background-color: var(--current-line);
+}
+
+.details .source-line > .number {
+    width: 44px;
+    flex-shrink: 0;
+    margin-right: 8px;
+    -unity-text-align: upper-right;
+    color: var(--secondary);
+}
+
+.details .source-line > .code {
+    white-space: nowrap;
+}

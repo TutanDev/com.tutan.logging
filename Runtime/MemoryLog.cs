@@ -132,7 +132,7 @@ namespace Tutan.Logging
 
             var kept = new MemoryRecord(
                 record.Sequence, record.Frame, record.Scope, record.Begin, record.Thread, record.Level, record.Kind,
-                record.Event, record.Suppressed, backlog, record.Elapsed, record.CallSite, context.Text(record), fields);
+                record.Event, record.Suppressed, backlog, record.Elapsed, record.CallSite, context.Text(record), Array.AsReadOnly(fields));
 
             lock (_lock)
                 _records.Add(kept);

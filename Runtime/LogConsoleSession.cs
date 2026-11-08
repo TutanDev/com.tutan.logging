@@ -12,12 +12,27 @@ namespace Tutan.Logging
     /// numbered from 1, in the order the process's sessions started or were opened. Its
     /// <c>default</c> is no session, which <see cref="LogConsole.Find"/> never finds.
     /// </summary>
-    public readonly record struct LogSessionId
+    public readonly record struct LogSessionId : IComparable<LogSessionId>
     {
         internal LogSessionId(long value) => Value = value;
 
         /// <summary>Its number, from 1; 0 for <c>default</c>.</summary>
         public long Value { get; }
+
+        /// <summary>Whether <paramref name="left"/> started or was opened before <paramref name="right"/>.</summary>
+        public static bool operator <(LogSessionId left, LogSessionId right) => left.Value < right.Value;
+
+        /// <summary>Whether <paramref name="left"/> started or was opened after <paramref name="right"/>.</summary>
+        public static bool operator >(LogSessionId left, LogSessionId right) => left.Value > right.Value;
+
+        /// <summary>Whether <paramref name="left"/> is <paramref name="right"/>, or started or was opened before it.</summary>
+        public static bool operator <=(LogSessionId left, LogSessionId right) => left.Value <= right.Value;
+
+        /// <summary>Whether <paramref name="left"/> is <paramref name="right"/>, or started or was opened after it.</summary>
+        public static bool operator >=(LogSessionId left, LogSessionId right) => left.Value >= right.Value;
+
+        /// <summary>Its order among the process's sessions: a session that started or was opened later is greater.</summary>
+        public int CompareTo(LogSessionId other) => Value.CompareTo(other.Value);
 
         /// <summary>Its number.</summary>
         public override string ToString() => Value.ToString(CultureInfo.InvariantCulture);
@@ -57,6 +72,13 @@ namespace Tutan.Logging
         /// <summary>What the function for its state makes of it: so a reader that tells the states apart is told of every one.</summary>
         public abstract R Match<R>(Func<Live, R> live, Func<Ended, R> ended, Func<File, R> file);
 
+        /// <summary>Whether it is the session of <paramref name="file"/>.</summary>
+        /// <remarks>
+        /// Only this assembly and its tests can override it, so no other assembly can make a session
+        /// through the copy constructor C# gives a record that is not sealed.
+        /// </remarks>
+        internal abstract bool IsOf(LogSessionFile file);
+
         /// <summary>A session a console sink keeps as its program runs, and writes every record it is handed to.</summary>
         public sealed record Live : LogConsoleSession
         {
@@ -74,6 +96,9 @@ namespace Tutan.Logging
 
             /// <inheritdoc />
             public override R Match<R>(Func<Live, R> live, Func<Ended, R> ended, Func<File, R> file) => live(this);
+
+            /// <inheritdoc />
+            internal override bool IsOf(LogSessionFile file) => false;
         }
 
         /// <summary>
@@ -100,6 +125,9 @@ namespace Tutan.Logging
 
             /// <inheritdoc />
             public override R Match<R>(Func<Live, R> live, Func<Ended, R> ended, Func<File, R> file) => ended(this);
+
+            /// <inheritdoc />
+            internal override bool IsOf(LogSessionFile file) => false;
         }
 
         /// <summary>A session read back from its file, which stays until it is closed.</summary>
@@ -128,8 +156,8 @@ namespace Tutan.Logging
             /// <inheritdoc />
             public override R Match<R>(Func<Live, R> live, Func<Ended, R> ended, Func<File, R> file) => file(this);
 
-            /// <summary>Whether it is the session of <paramref name="file"/>.</summary>
-            internal bool IsOf(LogSessionFile file) => ReferenceEquals(_file, file);
+            /// <inheritdoc />
+            internal override bool IsOf(LogSessionFile file) => ReferenceEquals(_file, file);
         }
     }
 
@@ -167,7 +195,7 @@ namespace Tutan.Logging
         public Optional<LogConsoleSession.Live> Start(string program, LogClock clock, int cap, LogRedaction redacted)
         {
             if (cap < 1)
-                throw new ArgumentOutOfRangeException(nameof(cap), $"A session holds at least one record, and a cap of {cap} was given.");
+                throw new ArgumentOutOfRangeException(nameof(cap), $"A session holds at least one record, and a cap of {cap.ToString(CultureInfo.InvariantCulture)} was given.");
             if (!_live)
                 return F.None;
 

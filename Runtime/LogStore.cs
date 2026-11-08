@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Tutan.Functional;
@@ -71,11 +72,11 @@ namespace Tutan.Logging
             if (rules is null)
                 throw new ArgumentNullException(nameof(rules));
             if (options.Records < MinRecords)
-                throw new ArgumentOutOfRangeException(nameof(options), $"A store holds at least {MinRecords} records, and {options.Records} were asked for.");
+                throw new ArgumentOutOfRangeException(nameof(options), $"A store holds at least {MinRecords.ToString(CultureInfo.InvariantCulture)} records, and {options.Records.ToString(CultureInfo.InvariantCulture)} were asked for.");
             if (options.Bits < MinBits)
-                throw new ArgumentOutOfRangeException(nameof(options), $"A store holds at least {MinBits} bits, and {options.Bits} were asked for.");
+                throw new ArgumentOutOfRangeException(nameof(options), $"A store holds at least {MinBits.ToString(CultureInfo.InvariantCulture)} bits, and {options.Bits.ToString(CultureInfo.InvariantCulture)} were asked for.");
             if (options.Refs < MinRefs)
-                throw new ArgumentOutOfRangeException(nameof(options), $"A store holds at least {MinRefs} refs, and {options.Refs} were asked for.");
+                throw new ArgumentOutOfRangeException(nameof(options), $"A store holds at least {MinRefs.ToString(CultureInfo.InvariantCulture)} refs, and {options.Refs.ToString(CultureInfo.InvariantCulture)} were asked for.");
 
             _clock = clock;
             _records = new LogEntry[RoundUpToPowerOf2(options.Records)];
@@ -401,7 +402,7 @@ namespace Tutan.Logging
             throw new ArgumentException($"{spec.Key} is declared at {declared}, and it was written at {level}.", nameof(level));
 
         private static void ThrowTooBig(LogEventSpec spec, int chars) =>
-            throw new ArgumentOutOfRangeException(nameof(chars), $"A record of {spec.Key} with {chars} slots of chars does not fit the store's rings.");
+            throw new ArgumentOutOfRangeException(nameof(chars), $"A record of {spec.Key} with {chars.ToString(CultureInfo.InvariantCulture)} slots of chars does not fit the store's rings.");
 
         private long Now() => _clock is null ? Stopwatch.GetTimestamp() : _clock();
 
@@ -445,6 +446,8 @@ namespace Tutan.Logging
                     case LogCatalogConflict.CategoryTwice twice:
                         Log.CategoryTaken(twice.Category, $"{twice.First.Type} in {twice.First.Assembly}", $"{twice.Second.Type} in {twice.Second.Assembly}");
                         break;
+                    default:
+                        throw new InvalidOperationException($"{conflicts[i].GetType().Name} is a conflict the store does not say.");
                 }
             }
         }

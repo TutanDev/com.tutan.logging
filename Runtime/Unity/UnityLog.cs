@@ -16,6 +16,9 @@ namespace Tutan.Logging
     /// </remarks>
     public static class UnityLog
     {
+        /// <summary>The field of <c>unity/Logged</c> that holds the stack Unity handed over with the message.</summary>
+        public const string StackTraceField = "StackTrace";
+
         /// <summary>Writes unity/Logged: {Message}.</summary>
         /// <remarks>The bridge passes an empty call site: where Unity's message came from is in its stack trace, not here.</remarks>
         internal static void Logged(this Log log, LogLevel level, string message, string stackTrace, LogType type,
@@ -47,7 +50,7 @@ namespace Tutan.Logging
                 new LogField[]
                 {
                     LogField.Ref("Message", LogValueKind.String, "string"),
-                    LogField.Ref("StackTrace", LogValueKind.String, "string"),
+                    LogField.Ref(StackTraceField, LogValueKind.String, "string"),
                     LogField.Enum("Type", "UnityEngine.LogType",
                         new[] { "Error", "Assert", "Warning", "Log", "Exception" },
                         new[] { 0L, 1L, 2L, 3L, 4L },

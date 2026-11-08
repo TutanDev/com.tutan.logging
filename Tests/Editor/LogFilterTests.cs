@@ -493,7 +493,7 @@ namespace Tutan.Logging.Tests
         [TestCase("Ärger", "arger", false)]
         [TestCase("Ошибка сохранения", "ОШИБКА", true)]
         [TestCase("σφάλμα", "ΣΦΆΛΜΑ", true)]
-        [TestCase("Straße", "STRASSE", false)]
+        [TestCase("Straße", "SS", false)]
         [TestCase("Saved 💾 slot", "💾", true)]
         public void Text_holds_a_value_wherever_it_is_ignoring_case(string text, string value, bool holds)
         {
@@ -510,6 +510,22 @@ namespace Tutan.Logging.Tests
             Assert.That(Parse("/a/"), Is.Not.EqualTo(Parse("/A/")));
             Assert.That(Parse("  "), Is.EqualTo(LogFilter.All));
             Assert.That(LogFilter.All with { Keep = Array.Empty<LogFilterTerm>(), LeaveOut = new List<LogFilterTerm>() }, Is.EqualTo(LogFilter.All));
+        }
+
+        [Test]
+        public void A_filter_keeps_an_event_when_its_event_terms_do_whatever_its_other_terms_say()
+        {
+            LogFilter some = Parse("tests.save.* -tests.save/Wrote");
+            LogFilter named = Parse("tests.heard tests.save/Saved");
+
+            Assert.That(LogFilter.All.KeepsEvent(SaveLog.Events.Saved), Is.True);
+            Assert.That(Parse("level>=error \"no image\" -thread:3").KeepsEvent(SaveLog.Events.Saved), Is.True, "Its event terms alone say.");
+            Assert.That(new[] { some.KeepsEvent(SaveLog.Events.Saved), some.KeepsEvent(SaveLog.Events.Wrote), some.KeepsEvent(HeardLog.Events.Heard) },
+                Is.EqualTo(new[] { true, false, false }));
+            Assert.That(new[] { named.KeepsEvent(SaveLog.Events.Saved), named.KeepsEvent(HeardLog.Events.Heard), named.KeepsEvent(SaveLog.Events.Wrote) },
+                Is.EqualTo(new[] { true, true, false }), "One of the events kept, when any is.");
+            Assert.That(Parse("-*").KeepsEvent(HeardLog.Events.Heard), Is.False);
+            Assert.Throws<ArgumentNullException>(() => LogFilter.All.KeepsEvent(null!));
         }
 
         /// <summary>Writes the records the matching tests read: frame 0, then 1, then 2.</summary>

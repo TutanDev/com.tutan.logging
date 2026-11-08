@@ -98,7 +98,7 @@ namespace Tutan.Logging
         public LogValue Field(int index)
         {
             if ((uint)index >= (uint)FieldCount)
-                throw new ArgumentOutOfRangeException(nameof(index), $"{Event.Key} has {FieldCount} fields here, and {index} was asked for.");
+                throw new ArgumentOutOfRangeException(nameof(index), $"{Event.Key} has {FieldCount.ToString(CultureInfo.InvariantCulture)} fields here, and {index.ToString(CultureInfo.InvariantCulture)} was asked for.");
 
             LogField[] fields = Event.FieldArray;
             ReadOnlySpan<long> bits = _batch.Bits(_index);
@@ -379,6 +379,25 @@ namespace Tutan.Logging
                 default:
                     throw new InvalidOperationException($"{Kind} is not a kind of value.");
             }
+        }
+
+        /// <summary>
+        /// The value as a sink that keeps strings writes it, leaving out <paramref name="redact"/>: an
+        /// exception's whole text, as its <c>ToString</c> writes it, where a message holds only its
+        /// type and message. It allocates, as <see cref="ToString"/> does.
+        /// </summary>
+        public string ToText(LogRedaction redact)
+        {
+            if (Field.Personal && (redact & LogRedaction.Personal) != 0)
+                return LogText.PersonalText;
+
+            string text = Kind == LogValueKind.Exception && !IsNone ? AsRef()!.ToString() : ToString();
+            if ((redact & LogRedaction.HomeFolder) == 0
+                || Kind is not (LogValueKind.String or LogValueKind.Chars or LogValueKind.Exception or LogValueKind.Formattable))
+                return text;
+
+            char[] chars = text.ToCharArray();
+            return new string(chars, 0, LogText.WithoutHome(chars));
         }
 
         /// <summary>The value formatted, as a string: for a test or a debugger, since it allocates.</summary>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
 using System.Threading;
 using Tutan.Functional;
 
@@ -135,8 +136,8 @@ namespace Tutan.Logging
 
             Optional<LogLevel> optional = level.HasValue ? F.Some(level.Value) : F.None;
             return Make(LogSpecOrigin.Program, category, name, kind, optional, template, fields, perSecond, source).Match(
-                error => throw new ArgumentException($"{category}/{name} is not an event: {error.Message}."),
-                spec => spec);
+                error => throw new ArgumentException($"{category}/{name} is not an event: {LogText.Closed(error.Message)}"),
+                static spec => spec);
         }
 
         /// <summary>
@@ -174,14 +175,14 @@ namespace Tutan.Logging
             if (kind == LogEventKind.Scope && level.IsNone)
                 return "it is a scope with no level, and a scope's level is its own, never chosen at the call";
             if (fields.Length > LogNames.MaxFields)
-                return $"it has {fields.Length} fields, and an event has at most {LogNames.MaxFields}";
+                return $"it has {fields.Length.ToString(CultureInfo.InvariantCulture)} fields, and an event has at most {LogNames.MaxFields.ToString(CultureInfo.InvariantCulture)}";
             if (perSecond < 0)
-                return $"it is limited to {perSecond} records a second, which is less than none";
+                return $"it is limited to {perSecond.ToString(CultureInfo.InvariantCulture)} records a second, which is less than none";
 
             for (int i = 0; i < fields.Length; i++)
             {
                 if (fields[i] is null)
-                    return $"its field {i} is null";
+                    return $"its field {i.ToString(CultureInfo.InvariantCulture)} is null";
 
                 for (int j = 0; j < i; j++)
                 {

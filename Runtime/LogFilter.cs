@@ -155,6 +155,38 @@ namespace Tutan.Logging
             Levels.Contains(record.Level) && MatchesTerms(record, scopes, Span<long>.Empty, out _);
 
         /// <summary>
+        /// Whether its event terms keep records of <paramref name="spec"/>: one of the events it keeps,
+        /// when it keeps any, and none it leaves out. So a console ticks the categories it shows.
+        /// </summary>
+        public bool KeepsEvent(LogEventSpec spec)
+        {
+            if (spec is null)
+                throw new ArgumentNullException(nameof(spec));
+
+            bool anyEvent = false;
+            bool ofAnEvent = false;
+            foreach (LogFilterTerm term in _keep)
+            {
+                if (term is LogFilterTerm.Event kept)
+                {
+                    anyEvent = true;
+                    ofAnEvent = ofAnEvent || kept.Names(spec);
+                }
+            }
+
+            if (anyEvent && !ofAnEvent)
+                return false;
+
+            foreach (LogFilterTerm term in _leaveOut)
+            {
+                if (term is LogFilterTerm.Event leftOut && leftOut.Names(spec))
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Whether <paramref name="record"/> is kept but for its level, which is what a level's badge
         /// counts; and whether a term's regular expression took too long over it.
         /// </summary>
@@ -168,22 +200,31 @@ namespace Tutan.Logging
         /// <param name="tookTooLong">Whether a term took too long over the record.</param>
         internal bool MatchesTerms(LogRecord record, LogScopes scopes, Span<long> gaveUpFrom, out bool tookTooLong)
         {
+            // The event terms first: a pattern is no regular expression, and never takes too long.
+            tookTooLong = false;
+            return KeepsEvent(record.Event) && MeetsOthers(record, scopes, gaveUpFrom, out tookTooLong);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="record"/> meets every term but its level and its event terms: its
+        /// frame, the other terms kept and none of the others left out. With the level, it is what a
+        /// category's count counts.
+        /// </summary>
+        /// <param name="record">The record.</param>
+        /// <param name="scopes">What is under what.</param>
+        /// <param name="gaveUpFrom">As <see cref="MatchesTerms"/> takes it.</param>
+        /// <param name="tookTooLong">Whether a term took too long over the record.</param>
+        internal bool MeetsOthers(LogRecord record, LogScopes scopes, Span<long> gaveUpFrom, out bool tookTooLong)
+        {
             tookTooLong = false;
             if (!Frames.Contains(record.Frame))
                 return false;
 
-            bool anyEvent = false;
-            bool ofAnEvent = false;
             for (int place = 0; place < _keep.Length; place++)
             {
                 LogFilterTerm term = _keep[place];
                 if (term is LogFilterTerm.Event)
-                {
-                    // An event's pattern is no regular expression, and never takes too long.
-                    anyEvent = true;
-                    ofAnEvent = ofAnEvent || term.Matches(record, scopes) == TermMatch.Yes;
                     continue;
-                }
 
                 TermMatch met = Met(term, place, record, scopes, gaveUpFrom);
                 if (met == TermMatch.TookTooLong)
@@ -196,13 +237,14 @@ namespace Tutan.Logging
                     return false;
             }
 
-            if (anyEvent && !ofAnEvent)
-                return false;
-
             for (int i = 0; i < _leaveOut.Length; i++)
             {
+                LogFilterTerm term = _leaveOut[i];
+                if (term is LogFilterTerm.Event)
+                    continue;
+
                 int place = _keep.Length + i;
-                TermMatch met = Met(_leaveOut[i], place, record, scopes, gaveUpFrom);
+                TermMatch met = Met(term, place, record, scopes, gaveUpFrom);
                 if (met == TermMatch.Yes)
                     return false;
 
@@ -303,7 +345,7 @@ namespace Tutan.Logging
 
             var copy = new LogFilterTerm[terms.Count];
             for (int i = 0; i < copy.Length; i++)
-                copy[i] = terms[i] ?? throw new ArgumentNullException(name, $"The term at {i} is null.");
+                copy[i] = terms[i] ?? throw new ArgumentNullException(name, $"The term at {i.ToString(CultureInfo.InvariantCulture)} is null.");
 
             return copy;
         }
@@ -694,13 +736,17 @@ namespace Tutan.Logging
             Filter.Levels.Contains(record.Level) && MatchesTerms(record, scopes);
 
         /// <summary>Whether <paramref name="record"/> is kept but for its level.</summary>
-        public bool MatchesTerms(LogRecord record, LogScopes scopes)
+        public bool MatchesTerms(LogRecord record, LogScopes scopes) =>
+            Filter.KeepsEvent(record.Event) && MeetsOthers(record, scopes);
+
+        /// <summary>Whether <paramref name="record"/> is kept but for its level and its event terms.</summary>
+        public bool MeetsOthers(LogRecord record, LogScopes scopes)
         {
-            bool kept = Filter.MatchesTerms(record, scopes, _gaveUpFrom, out bool tookTooLong);
+            bool met = Filter.MeetsOthers(record, scopes, _gaveUpFrom, out bool tookTooLong);
             if (tookTooLong)
                 GaveUp = Listed(Filter, _gaveUpFrom);
 
-            return kept;
+            return met;
         }
 
         private static long[] NoneGaveUp(int terms)
@@ -895,7 +941,10 @@ namespace Tutan.Logging
             /// <summary>The pattern.</summary>
             public string Pattern { get; }
 
-            internal override TermMatch Matches(LogRecord record, LogScopes scopes) => Met(LogPattern.Specificity(Pattern, record.Event) >= 0);
+            internal override TermMatch Matches(LogRecord record, LogScopes scopes) => Met(Names(record.Event));
+
+            /// <summary>Whether the pattern names <paramref name="spec"/>.</summary>
+            internal bool Names(LogEventSpec spec) => LogPattern.Specificity(Pattern, spec) >= 0;
 
             /// <inheritdoc />
             public override string ToString() => Pattern;
@@ -910,7 +959,7 @@ namespace Tutan.Logging
             public Scope(long id)
             {
                 if (id < 1)
-                    throw new ArgumentOutOfRangeException(nameof(id), $"A scope is the sequence of the record that opened it, which counts from 1, and {id} was given.");
+                    throw new ArgumentOutOfRangeException(nameof(id), $"A scope is the sequence of the record that opened it, which counts from 1, and {id.ToString(CultureInfo.InvariantCulture)} was given.");
                 Id = id;
             }
 
@@ -933,7 +982,7 @@ namespace Tutan.Logging
             public Thread(int id)
             {
                 if (id < 0)
-                    throw new ArgumentOutOfRangeException(nameof(id), $"A thread's managed id is 0 or more, and {id} was given.");
+                    throw new ArgumentOutOfRangeException(nameof(id), $"A thread's managed id is 0 or more, and {id.ToString(CultureInfo.InvariantCulture)} was given.");
                 Id = id;
             }
 

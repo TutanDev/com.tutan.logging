@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace Tutan.Logging
 {
@@ -94,6 +95,13 @@ namespace Tutan.Logging
             record.Kind == LogRecordKind.ScopeEnd && TryScope(record.Begin, out LogRecord begin)
                 ? LogText.ToText(begin, Redact)
                 : LogText.ToText(record, Redact);
+
+        /// <summary>
+        /// A field's value as a string, with the sink's redaction, for a sink that keeps strings: an
+        /// exception's whole text, as its <c>ToString</c> writes it, where the message holds only its
+        /// type and message.
+        /// </summary>
+        public string Text(LogValue value) => value.ToText(Redact);
     }
 
     /// <summary>
@@ -130,11 +138,11 @@ namespace Tutan.Logging
             {
                 (ILogSink target, LogSinkOptions options) = sinks[i];
                 if (target is null)
-                    throw new ArgumentNullException(nameof(sinks), $"The sink at {i} is null.");
+                    throw new ArgumentNullException(nameof(sinks), $"The sink at {i.ToString(CultureInfo.InvariantCulture)} is null.");
                 if (options is null)
                     throw new ArgumentNullException(nameof(sinks), $"The options of {target.Name} are null.");
                 if (options.Backlog < 0)
-                    throw new ArgumentOutOfRangeException(nameof(sinks), $"The backlog of {target.Name} is {options.Backlog}, which is less than none.");
+                    throw new ArgumentOutOfRangeException(nameof(sinks), $"The backlog of {target.Name} is {options.Backlog.ToString(CultureInfo.InvariantCulture)}, which is less than none.");
                 for (int j = 0; j < i; j++)
                 {
                     if (ReferenceEquals(_sinks[j].Target, target))

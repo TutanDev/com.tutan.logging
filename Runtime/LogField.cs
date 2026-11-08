@@ -95,7 +95,7 @@ namespace Tutan.Logging
             if (values is null)
                 throw new ArgumentNullException(nameof(values));
             if (names.Length != values.Length)
-                throw new ArgumentException($"The enum {type} has {names.Length} names and {values.Length} values.", nameof(values));
+                throw new ArgumentException($"The enum {type} has {names.Length.ToString(CultureInfo.InvariantCulture)} names and {values.Length.ToString(CultureInfo.InvariantCulture)} values.", nameof(values));
 
             return new LogField(name, LogValueKind.Enum, type, 1, personal, tag, optional, new LogEnumNames(names, values, flags), null);
         }
@@ -132,7 +132,7 @@ namespace Tutan.Logging
         {
             int size = SizeOf<T>.Bytes;
             if (size > MaxValueBytes)
-                throw new ArgumentException($"A {typeof(T).Name} is {size} bytes, and a field's value is at most {MaxValueBytes}.");
+                throw new ArgumentException($"A {typeof(T).Name} is {size.ToString(CultureInfo.InvariantCulture)} bytes, and a field's value is at most {MaxValueBytes.ToString(CultureInfo.InvariantCulture)}.");
 
             return (size + 7) >> 3;
         }

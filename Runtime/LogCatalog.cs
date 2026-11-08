@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
 using System.Threading;
 using Tutan.Functional;
 
@@ -106,7 +107,7 @@ namespace Tutan.Logging
             for (int i = 0; i < specs.Length; i++)
             {
                 if (specs[i] is null)
-                    throw new ArgumentNullException(nameof(specs), $"The spec at {i} is null.");
+                    throw new ArgumentNullException(nameof(specs), $"The spec at {i.ToString(CultureInfo.InvariantCulture)} is null.");
                 if (specs[i].Origin == LogSpecOrigin.File)
                     throw new ArgumentException($"{specs[i].Key} was read back from a file, and the catalog holds only the events this program declares.", nameof(specs));
             }
@@ -188,6 +189,16 @@ namespace Tutan.Logging
         {
         }
 
+        /// <summary>The conflict as a sentence: <c>tests.save is declared by ... and again by ...</c>.</summary>
+        /// <remarks>
+        /// Only this assembly and its tests can override it, so no other assembly can make a conflict
+        /// through the copy constructor C# gives a record that is not sealed.
+        /// </remarks>
+        internal abstract string Sentence { get; }
+
+        /// <summary>The conflict as a sentence: <c>tests.save is declared by ... and again by ...</c>.</summary>
+        public sealed override string ToString() => Sentence;
+
         /// <summary>Two events with one key.</summary>
         /// <param name="Key">The key.</param>
         /// <param name="First">Where the one the catalog finds is declared.</param>
@@ -195,7 +206,7 @@ namespace Tutan.Logging
         public sealed record KeyTwice(string Key, LogSource First, LogSource Second) : LogCatalogConflict
         {
             /// <inheritdoc />
-            public override string ToString() =>
+            internal override string Sentence =>
                 $"{Key} is declared by {First.Type} in {First.Assembly} and again by {Second.Type} in {Second.Assembly}";
         }
 
@@ -206,7 +217,7 @@ namespace Tutan.Logging
         public sealed record CategoryTwice(string Category, LogSource First, LogSource Second) : LogCatalogConflict
         {
             /// <inheritdoc />
-            public override string ToString() =>
+            internal override string Sentence =>
                 $"The category {Category} is declared by {First.Type} in {First.Assembly} and again by {Second.Type} in {Second.Assembly}";
         }
     }

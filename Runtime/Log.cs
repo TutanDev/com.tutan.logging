@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 
 namespace Tutan.Logging
@@ -119,7 +120,7 @@ namespace Tutan.Logging
         public override string ToString() =>
             _store is null ? "Log (default: never handed a store)"
             : ReferenceEquals(_store, LogStore.Discarding) ? "Log.Discard"
-            : _scope == 0 ? $"Log of {_store.Program}" : $"Log of {_store.Program} under #{_scope}";
+            : _scope == 0 ? $"Log of {_store.Program}" : $"Log of {_store.Program} under #{_scope.ToString(CultureInfo.InvariantCulture)}";
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void ThrowNotHanded() => throw NotHanded();

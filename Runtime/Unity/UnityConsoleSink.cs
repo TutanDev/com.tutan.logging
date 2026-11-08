@@ -86,7 +86,7 @@ namespace Tutan.Logging
             {
                 LogValue value = record.Field(i);
                 if (value.Kind == LogValueKind.Exception && !value.IsNone)
-                    row += "\n" + Redacted(value.AsRef()!.ToString(), value.Field, context.Redact);
+                    row += "\n" + context.Text(value);
             }
 
             LogType type = TypeOf(record.Level);
@@ -145,18 +145,6 @@ namespace Tutan.Logging
             using (UnityConsoleEcho.Mark())
                 Debug.LogFormat(type, LogOption.NoStacktrace, null, "{0}", _args);
             _args[0] = null!;
-        }
-
-        /// <summary>An exception's whole text, with what the sink redacts left out.</summary>
-        private static string Redacted(string text, LogField field, LogRedaction redact)
-        {
-            if (field.Personal && (redact & LogRedaction.Personal) != 0)
-                return LogText.PersonalText;
-            if ((redact & LogRedaction.HomeFolder) == 0)
-                return text;
-
-            char[] chars = text.ToCharArray();
-            return new string(chars, 0, LogText.WithoutHome(chars));
         }
 
         /// <summary>The row's first line: whether context, the category, the message, what a limit dropped, and what it is under.</summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 
 namespace Tutan.Logging
@@ -75,7 +76,7 @@ namespace Tutan.Logging
         internal LogArchive(string program, LogClock clock, int cap, LogRedaction redacted = LogRedaction.None)
         {
             if (cap < 1)
-                throw new ArgumentOutOfRangeException(nameof(cap), $"An archive holds at least one record, and {cap} was given.");
+                throw new ArgumentOutOfRangeException(nameof(cap), $"An archive holds at least one record, and {cap.ToString(CultureInfo.InvariantCulture)} was given.");
 
             Program = program ?? throw new ArgumentNullException(nameof(program));
             Clock = clock;
@@ -304,7 +305,7 @@ namespace Tutan.Logging
             lock (_lock)
             {
                 if ((uint)entry.Event >= (uint)_events.Length)
-                    throw new ArgumentOutOfRangeException(nameof(entry), $"The record names event {entry.Event}, and {_events.Length} are declared.");
+                    throw new ArgumentOutOfRangeException(nameof(entry), $"The record names event {entry.Event.ToString(CultureInfo.InvariantCulture)}, and {_events.Length.ToString(CultureInfo.InvariantCulture)} are declared.");
 
                 return AddHeld(entry, bits, refs);
             }
@@ -332,7 +333,7 @@ namespace Tutan.Logging
         internal void Lose(long count)
         {
             if (count < 0)
-                throw new ArgumentOutOfRangeException(nameof(count), $"A loss is of 0 records or more, and {count} was given.");
+                throw new ArgumentOutOfRangeException(nameof(count), $"A loss is of 0 records or more, and {count.ToString(CultureInfo.InvariantCulture)} was given.");
 
             lock (_lock)
             {

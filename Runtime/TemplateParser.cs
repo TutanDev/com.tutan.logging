@@ -83,7 +83,7 @@ namespace Tutan.Logging
                     int close = template.IndexOf('}', at + 1);
                     if (close < 0)
                     {
-                        error = $"the hole at {at} is not closed";
+                        error = $"the hole at {at.ToString(CultureInfo.InvariantCulture)} is not closed";
                         return null;
                     }
 
@@ -107,7 +107,7 @@ namespace Tutan.Logging
                         continue;
                     }
 
-                    error = $"the '}}' at {at} closes no hole, and a '}}' of the text is written '}}}}'";
+                    error = $"the '}}' at {at.ToString(CultureInfo.InvariantCulture)} closes no hole, and a '}}' of the text is written '}}}}'";
                     return null;
                 }
 
@@ -133,33 +133,33 @@ namespace Tutan.Logging
 
             if (name.Length == 0)
             {
-                error = $"the hole at {at} has no name";
+                error = $"the hole at {at.ToString(CultureInfo.InvariantCulture)} has no name";
                 return null;
             }
 
             if (!LogNames.IsEventName(name))
             {
                 error = char.IsDigit(name[0])
-                    ? $"the hole at {at} is numbered, and a hole is named after its parameter, as {{Slot}}"
-                    : $"the hole at {at} is named '{name}', and a name is an ASCII letter or '_' followed by letters, digits and '_'";
+                    ? $"the hole at {at.ToString(CultureInfo.InvariantCulture)} is numbered, and a hole is named after its parameter, as {{Slot}}"
+                    : $"the hole at {at.ToString(CultureInfo.InvariantCulture)} is named '{name}', and a name is an ASCII letter or '_' followed by letters, digits and '_'";
                 return null;
             }
 
             if (comma >= 0 && !int.TryParse(head.Substring(comma + 1), NumberStyles.AllowLeadingSign | NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite, CultureInfo.InvariantCulture, out alignment))
             {
-                error = $"the hole at {at} has the alignment '{head.Substring(comma + 1)}', which is not a whole number";
+                error = $"the hole at {at.ToString(CultureInfo.InvariantCulture)} has the alignment '{head.Substring(comma + 1)}', which is not a whole number";
                 return null;
             }
 
             if (alignment < -MostAlignment || alignment > MostAlignment)
             {
-                error = $"the hole at {at} pads to {alignment}, and a hole pads to at most {MostAlignment} either way";
+                error = $"the hole at {at.ToString(CultureInfo.InvariantCulture)} pads to {alignment.ToString(CultureInfo.InvariantCulture)}, and a hole pads to at most {MostAlignment.ToString(CultureInfo.InvariantCulture)} either way";
                 return null;
             }
 
             if (format.IndexOf('{') >= 0)
             {
-                error = $"the hole at {at} has a '{{' in its format";
+                error = $"the hole at {at.ToString(CultureInfo.InvariantCulture)} has a '{{' in its format";
                 return null;
             }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading;
 
 namespace Tutan.Logging
@@ -67,7 +68,7 @@ namespace Tutan.Logging
         internal LogConsoleSink(int cap, string name, ConsoleSessions sessions)
         {
             if (cap < 1)
-                throw new ArgumentOutOfRangeException(nameof(cap), $"A session holds at least one record, and a cap of {cap} was given.");
+                throw new ArgumentOutOfRangeException(nameof(cap), $"A session holds at least one record, and a cap of {cap.ToString(CultureInfo.InvariantCulture)} was given.");
 
             Cap = cap;
             Name = name ?? throw new ArgumentNullException(nameof(name));

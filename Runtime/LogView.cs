@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Tutan.Functional;
 
 namespace Tutan.Logging
@@ -55,7 +56,7 @@ namespace Tutan.Logging
         internal LogView(LogRecords source, LogFilter filter, int budget)
         {
             if (budget < 1)
-                throw new ArgumentOutOfRangeException(nameof(budget), $"A scan reads at least one record an update, and {budget} was given.");
+                throw new ArgumentOutOfRangeException(nameof(budget), $"A scan reads at least one record an update, and {budget.ToString(CultureInfo.InvariantCulture)} was given.");
 
             Source = source ?? throw new ArgumentNullException(nameof(source));
             _filter = filter ?? throw new ArgumentNullException(nameof(filter));
@@ -118,6 +119,20 @@ namespace Tutan.Logging
 
         /// <summary>How many records the records held match, by level: everything the filter keeps but for its levels, so a level's count is what keeping it would show.</summary>
         public LogLevelCounts Counts => _state.Counts;
+
+        /// <summary>
+        /// How many records the records held match of the event at <paramref name="place"/> in the
+        /// events of <see cref="Source"/>: everything the filter keeps but for its event terms, so an
+        /// event's count is what keeping it would show, and a category's is its events'. None for an
+        /// event declared since the view last read.
+        /// </summary>
+        public long EventCount(int place)
+        {
+            if (place < 0)
+                throw new ArgumentOutOfRangeException(nameof(place), $"An event's place is 0 or more, and {place.ToString(CultureInfo.InvariantCulture)} was given.");
+
+            return _state.EventCount(place);
+        }
 
         /// <summary>How many records were lost before this view read them: overwritten by the store, or lost before a sink kept them.</summary>
         public long Lost => _state.Lost;
@@ -238,8 +253,9 @@ namespace Tutan.Logging
         /// Writes to <paramref name="sink"/> every record that <paramref name="count"/> rows from
         /// <paramref name="row"/> stand for, a repeat's every record, as a drain would, from opening it
         /// to flushing it: so a console copies rows as text or as JSON lines, or exports what it shows.
-        /// Where the records say some were lost among them, or the store has overwritten some since,
-        /// the sink is told how many.
+        /// A scope whose opening it writes has its closing written too while the records hold it, though
+        /// it lies after the last row. Where the records say some were lost among them, or the store has
+        /// overwritten some since, the sink is told how many.
         /// </summary>
         /// <param name="sink">A sink that has not been opened.</param>
         /// <param name="row">The first row.</param>
@@ -251,53 +267,145 @@ namespace Tutan.Logging
                 throw new ArgumentNullException(nameof(sink));
             CheckRows(row, count);
 
-            // The rows' pass as it stands, so the copy leaves out what the rows do; a regular
-            // expression that gives up over the copy gives up over it alone.
-            FilterPass pass = _state.Pass.Copy();
-            var scopes = new ScopeTable();
-            var context = new LogContext(Source, options ?? new LogSinkOptions(LogLevel.Trace), scopes);
-            sink.Open(context);
+            Writing writing = Open(sink, options);
             if (count > 0)
             {
-                long until = _state[row + count - 1].Last + 1;
-                var batch = new LogBatch();
-                var openings = new LogBatch(1);
-                for (long from = _state[row].Sequence; from < until;)
-                {
-                    LogRead read = Source.Read(from, batch);
-                    if (read.Lost > 0)
-                        sink.Lost(read.Lost, context);
-
-                    for (int i = 0; i < batch.Count && batch[i].Sequence < until; i++)
-                    {
-                        LogRecord record = batch[i];
-                        if (record.Kind == LogRecordKind.ScopeBegin)
-                            scopes.Open(batch, i);
-
-                        if (record.Kind != LogRecordKind.ScopeEnd && record.Level >= context.Options.Least
-                            && pass.Matches(record, Scopes) && !UnderFolded(_state, record.Scope))
-                        {
-                            Opened(scopes, record.Scope, openings);
-                            sink.Write(record, record.IsBacklog, context);
-                        }
-
-                        if (record.Kind == LogRecordKind.ScopeEnd)
-                            scopes.Close(record.Begin);
-                    }
-
-                    if (read.Count == 0)
-                        break;
-                    from = read.Next;
-                }
+                long until = WriteRun(writing, row, count);
+                WriteClosings(writing, until, Source.Next);
             }
 
             sink.Flush();
         }
 
+        /// <summary>
+        /// Writes to <paramref name="sink"/> the records of each of <paramref name="rows"/>, as the
+        /// overload that takes a run of rows does, through one opening of the sink: so a console copies
+        /// a selection that is not one run, and JSON lines have one header.
+        /// </summary>
+        /// <param name="sink">A sink that has not been opened.</param>
+        /// <param name="rows">The rows, in order, each once.</param>
+        /// <param name="options">What it writes with: every level, and nothing left out, when none are given.</param>
+        public void Write(ILogSink sink, IReadOnlyList<int> rows, LogSinkOptions? options = null)
+        {
+            if (sink is null)
+                throw new ArgumentNullException(nameof(sink));
+            if (rows is null)
+                throw new ArgumentNullException(nameof(rows));
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                CheckRows(rows[i], 1);
+                if (i > 0 && rows[i] <= rows[i - 1])
+                    throw new ArgumentException($"The rows are in order, each once, and {rows[i].ToString(CultureInfo.InvariantCulture)} follows {rows[i - 1].ToString(CultureInfo.InvariantCulture)}.", nameof(rows));
+            }
+
+            Writing writing = Open(sink, options);
+            long written = -1;
+            for (int first = 0; first < rows.Count;)
+            {
+                int end = first + 1;
+                while (end < rows.Count && rows[end] == rows[end - 1] + 1)
+                    end++;
+
+                if (written >= 0)
+                    WriteClosings(writing, written, _state[rows[first]].Sequence);
+                written = WriteRun(writing, rows[first], end - first);
+                first = end;
+            }
+
+            if (written >= 0)
+                WriteClosings(writing, written, Source.Next);
+            sink.Flush();
+        }
+
+        private Writing Open(ILogSink sink, LogSinkOptions? options)
+        {
+            // The rows' pass as it stands, so the copy leaves out what the rows do; a regular
+            // expression that gives up over the copy gives up over it alone.
+            var scopes = new ScopeTable();
+            var context = new LogContext(Source, options ?? new LogSinkOptions(LogLevel.Trace), scopes);
+            var writing = new Writing(sink, _state.Pass.Copy(), scopes, context);
+            sink.Open(context);
+            return writing;
+        }
+
+        /// <summary>Writes the records of <paramref name="count"/> rows from <paramref name="row"/>, which lie together; says the sequence after the last.</summary>
+        private long WriteRun(Writing writing, int row, int count)
+        {
+            ILogSink sink = writing.Sink;
+            LogContext context = writing.Context;
+            LogBatch batch = writing.Batch;
+            long until = _state[row + count - 1].Last + 1;
+            for (long from = _state[row].Sequence; from < until;)
+            {
+                LogRead read = Source.Read(from, batch);
+                if (read.Lost > 0)
+                    sink.Lost(read.Lost, context);
+
+                for (int i = 0; i < batch.Count && batch[i].Sequence < until; i++)
+                {
+                    LogRecord record = batch[i];
+                    if (record.Kind == LogRecordKind.ScopeBegin)
+                        writing.Scopes.Open(batch, i);
+
+                    if (record.Kind == LogRecordKind.ScopeEnd)
+                    {
+                        // The closing of an opening written, whatever the filter, as the opening's row says how long it took.
+                        if (writing.Written.Remove(record.Begin))
+                            sink.Write(record, record.IsBacklog, context);
+
+                        writing.Scopes.Close(record.Begin);
+                    }
+                    else if (record.Level >= context.Options.Least && writing.Pass.Matches(record, Scopes) && !UnderFolded(_state, record.Scope))
+                    {
+                        Opened(writing.Scopes, record.Scope, writing.Openings);
+                        sink.Write(record, record.IsBacklog, context);
+                        if (record.Kind == LogRecordKind.ScopeBegin)
+                            writing.Written.Add(record.Sequence);
+                    }
+                }
+
+                if (read.Count == 0)
+                    break;
+                from = read.Next;
+            }
+
+            return until;
+        }
+
+        /// <summary>
+        /// Writes the closings of the openings written that lie from <paramref name="from"/> to
+        /// <paramref name="until"/>, where no row is written: so a scope that closed between the rows,
+        /// or after the last, says how long it took in the copy as its row does. Nothing else there is
+        /// written, and no loss there is told, as neither is among the rows.
+        /// </summary>
+        private void WriteClosings(Writing writing, long from, long until)
+        {
+            LogBatch batch = writing.Batch;
+            while (writing.Written.Count > 0 && from < until)
+            {
+                LogRead read = Source.Read(from, batch);
+                for (int i = 0; i < batch.Count && batch[i].Sequence < until; i++)
+                {
+                    LogRecord record = batch[i];
+                    if (record.Kind != LogRecordKind.ScopeEnd)
+                        continue;
+
+                    if (writing.Written.Remove(record.Begin))
+                        writing.Sink.Write(record, record.IsBacklog, writing.Context);
+                    writing.Scopes.Close(record.Begin);
+                }
+
+                if (read.Count == 0)
+                    break;
+                from = read.Next;
+            }
+        }
+
         private static void CheckScope(long scope)
         {
             if (scope < 1)
-                throw new ArgumentOutOfRangeException(nameof(scope), $"A scope is the sequence of the record that opened it, which counts from 1, and {scope} was given.");
+                throw new ArgumentOutOfRangeException(nameof(scope), $"A scope is the sequence of the record that opened it, which counts from 1, and {scope.ToString(CultureInfo.InvariantCulture)} was given.");
         }
 
         // The openings of the scopes a record is under that the records written so far did not open,
@@ -321,11 +429,11 @@ namespace Tutan.Logging
         private void CheckRows(int row, int count)
         {
             if (row < 0)
-                throw new ArgumentOutOfRangeException(nameof(row), $"A row is 0 or more, and {row} was given.");
+                throw new ArgumentOutOfRangeException(nameof(row), $"A row is 0 or more, and {row.ToString(CultureInfo.InvariantCulture)} was given.");
             if (count < 0)
-                throw new ArgumentOutOfRangeException(nameof(count), $"A count of rows is 0 or more, and {count} was given.");
+                throw new ArgumentOutOfRangeException(nameof(count), $"A count of rows is 0 or more, and {count.ToString(CultureInfo.InvariantCulture)} was given.");
             if ((long)row + count > _state.Count)
-                throw new ArgumentOutOfRangeException(nameof(count), $"The view has {_state.Count} rows, and {count} from {row} were asked for.");
+                throw new ArgumentOutOfRangeException(nameof(count), $"The view has {_state.Count.ToString(CultureInfo.InvariantCulture)} rows, and {count.ToString(CultureInfo.InvariantCulture)} from {row.ToString(CultureInfo.InvariantCulture)} were asked for.");
         }
 
         private void Rescan()
@@ -357,11 +465,18 @@ namespace Tutan.Logging
         {
             LogRecord record = _batch[index];
             Scopes.Learn(record);
-            if (record.Kind == LogRecordKind.ScopeEnd || !state.Pass.MatchesTerms(record, Scopes))
+            if (record.Kind == LogRecordKind.ScopeEnd)
                 return;
 
-            state.Tally(record.Sequence, record.Level);
-            if (!state.Filter.Levels.Contains(record.Level) || UnderFolded(state, record.Scope))
+            // A level's badge counts what the filter keeps but for its levels, and an event's count
+            // what it keeps but for its event terms, so a record that meets neither counts for nothing.
+            bool ofEvent = state.Filter.KeepsEvent(record.Event);
+            bool ofLevel = state.Filter.Levels.Contains(record.Level);
+            if ((!ofEvent && !ofLevel) || !state.Pass.MeetsOthers(record, Scopes))
+                return;
+
+            state.Tally(record.Sequence, record.Level, _batch.Entry(index).Event, byLevel: ofEvent, byEvent: ofLevel);
+            if (!ofEvent || !ofLevel || UnderFolded(state, record.Scope))
                 return;
 
             if (!state.Repeat(_batch, index))
@@ -410,6 +525,7 @@ namespace Tutan.Logging
             private readonly int _most;
             private readonly HashSet<long> _folded = new HashSet<long>();
             private readonly long[] _counts = new long[6];
+            private long[] _eventCounts = new long[64];
             private readonly LogBatch _last = new LogBatch(1);
             private readonly HashSet<long> _scopeRows = new HashSet<long>();
 
@@ -445,13 +561,15 @@ namespace Tutan.Logging
                 get
                 {
                     if ((uint)row >= (uint)_count)
-                        throw new ArgumentOutOfRangeException(nameof(row), $"The view has {_count} rows, and {row} was asked for.");
+                        throw new ArgumentOutOfRangeException(nameof(row), $"The view has {_count.ToString(CultureInfo.InvariantCulture)} rows, and {row.ToString(CultureInfo.InvariantCulture)} was asked for.");
 
                     return _rows[(_head + row) & (_rows.Length - 1)];
                 }
             }
 
             public LogLevelCounts Counts => new LogLevelCounts(_counts[0], _counts[1], _counts[2], _counts[3], _counts[4], _counts[5]);
+
+            public long EventCount(int place) => place < _eventCounts.Length ? _eventCounts[place] : 0;
 
             private int Tail => (_head + _count - 1) & (_rows.Length - 1);
 
@@ -469,6 +587,7 @@ namespace Tutan.Logging
                 _countedHead = 0;
                 _countedCount = 0;
                 Array.Clear(_counts, 0, _counts.Length);
+                Array.Clear(_eventCounts, 0, _eventCounts.Length);
                 _last.Clear();
                 _scopeRows.Clear();
                 _losses.Clear();
@@ -554,7 +673,8 @@ namespace Tutan.Logging
                 Next = Math.Max(from, source.First);
             }
 
-            public void Tally(long sequence, LogLevel level)
+            /// <summary>Counts a record: by its level when <paramref name="byLevel"/>, and by its event when <paramref name="byEvent"/>.</summary>
+            public void Tally(long sequence, LogLevel level, int @event, bool byLevel, bool byEvent)
             {
                 if (_countedCount == _counted.Length)
                 {
@@ -569,9 +689,18 @@ namespace Tutan.Logging
                     }
                 }
 
-                if ((uint)level < (uint)_counts.Length)
+                if (byLevel && (uint)level < (uint)_counts.Length)
                     _counts[(int)level]++;
-                _counted[(_countedHead + _countedCount++) & (_counted.Length - 1)] = new Counted(sequence, level);
+                if (byEvent)
+                {
+                    // Grown only when an event is declared, which is rare once a program has started.
+                    if (@event >= _eventCounts.Length)
+                        Array.Resize(ref _eventCounts, PowerOfTwo(@event + 1));
+                    _eventCounts[@event]++;
+                }
+
+                CountedBy by = (byLevel ? CountedBy.Level : 0) | (byEvent ? CountedBy.Event : 0);
+                _counted[(_countedHead + _countedCount++) & (_counted.Length - 1)] = new Counted(sequence, level, @event, by);
             }
 
             /// <summary>Folds record <paramref name="index"/> of <paramref name="batch"/> into the last row, if it repeats it: an event of the same event, level, scope and values.</summary>
@@ -663,8 +792,10 @@ namespace Tutan.Logging
 
             private void Uncount(Counted counted)
             {
-                if ((uint)counted.Level < (uint)_counts.Length)
+                if ((counted.By & CountedBy.Level) != 0 && (uint)counted.Level < (uint)_counts.Length)
                     _counts[(int)counted.Level]--;
+                if ((counted.By & CountedBy.Event) != 0)
+                    _eventCounts[counted.Event]--;
             }
 
             private static bool SameRefs(ReadOnlySpan<object?> a, ReadOnlySpan<object?> b)
@@ -691,17 +822,31 @@ namespace Tutan.Logging
                 return grown;
             }
 
+            /// <summary>Which counts a record is in: its level's, its event's, or both.</summary>
+            [Flags]
+            private enum CountedBy : byte
+            {
+                Level = 1,
+                Event = 2,
+            }
+
             private readonly struct Counted
             {
-                public Counted(long sequence, LogLevel level)
+                public Counted(long sequence, LogLevel level, int @event, CountedBy by)
                 {
                     Sequence = sequence;
+                    Event = @event;
                     Level = level;
+                    By = by;
                 }
 
                 public long Sequence { get; }
 
+                public int Event { get; }
+
                 public LogLevel Level { get; }
+
+                public CountedBy By { get; }
             }
 
             private readonly struct Loss
@@ -717,6 +862,33 @@ namespace Tutan.Logging
                 public long Count { get; }
             }
         }
+    }
+
+    /// <summary>What one write of rows to a sink reads with and remembers, from opening the sink to flushing it.</summary>
+    internal sealed class Writing
+    {
+        public Writing(ILogSink sink, FilterPass pass, ScopeTable scopes, LogContext context)
+        {
+            Sink = sink;
+            Pass = pass;
+            Scopes = scopes;
+            Context = context;
+        }
+
+        public ILogSink Sink { get; }
+
+        public FilterPass Pass { get; }
+
+        public ScopeTable Scopes { get; }
+
+        public LogContext Context { get; }
+
+        public LogBatch Batch { get; } = new LogBatch();
+
+        public LogBatch Openings { get; } = new LogBatch(1);
+
+        /// <summary>The scopes whose opening was written and whose closing has not been.</summary>
+        public HashSet<long> Written { get; } = new HashSet<long>();
     }
 
     /// <summary>

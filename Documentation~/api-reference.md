@@ -216,6 +216,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `ReadOnlySpan<char> AsChars()` | A string's chars, or chars copied at the call |
 | `object? AsRef()` | The string or exception it was kept by |
 | `bool TryFormat(Span<char> destination, out int written, string? format = null)` | Writes it in the invariant culture |
+| `string ToText(LogRedaction redact)` | It as a sink that keeps strings writes it, leaving out `redact`: an exception's whole text, where a message holds its type and message; allocated |
 | `ToString()` | It formatted, allocated |
 
 ### `LogValueKind`
@@ -331,6 +332,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `bool TryScope(long scope, out LogRecord begin)` | The record that opened a scope still open |
 | `bool TryFormat(LogRecord record, Span<char> destination, out int written)` | A record's message with the sink's redaction |
 | `string Text(LogRecord record)` | The same, as a string |
+| `string Text(LogValue value)` | A field's value as a string, with the sink's redaction: an exception's whole text |
 
 ## Sinks
 
@@ -364,14 +366,42 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | Member | Description |
 |---|---|
 | `const string Extension` | `.jsonl` |
-| `static Result<JsonLinesSink> Session(LogStore store, int keep = 10)` | A file for this session in `Application.persistentDataPath/Logs` |
+| `static string Folder` | `Application.persistentDataPath/Logs`, where `Session(store)` keeps a program's files |
+| `static Result<JsonLinesSink> Session(LogStore store, int keep = 10)` | A file for this session in `Folder` |
 | `static Result<JsonLinesSink> Session(LogStore store, string folder, int keep = 10)` | A file for this session in a folder, keeping the program's latest `keep` |
 | `static Result<LogSessionFile> Read(string path)` | The log a `JsonLinesSink` wrote to a file, as far as it goes; fails with a `LogFileReadError` code |
 | `static Result<LogSessionFile> Read(Stream stream, string name)` | The same, from a stream, which it leaves open; `name` is what the errors call it |
+| `static string ExportName(string program, DateTimeOffset at)` | The name to offer for an export, as `Sample Game export 20261104-093015.jsonl`: never a session file's, so `Session` never deletes it |
+| `static Result<LogExported> Export(LogView view, string path, LogSinkOptions options)` | Writes every row of a view as JSON lines that `Read` reads back, beside the path and moved to it once whole; fails with a `LogExportError` code |
 
 ### `LogFileError`
 
 `NoFolder`, `NoFile`: the `Error.Code` of a failed `Session`.
+
+### `LogExportError`
+
+The `Error.Code` of a failed `Export`.
+`NotWritten`: it could not be written, and the file at the path, when there was one, is as it was, with nothing beside it.
+`NotPutBack`: a replace failed half way and could not put back the file it moved aside, which is beside the path under the name the error says, with why.
+`LeftBeside`: a replace failed half way, and the file at the path is there, but the replace also left a file beside it under the name it moves aside to, which the error names; that file is kept, as it may be the only copy of the file that was there.
+Each way, what it wrote is deleted, or the error says where it is.
+
+### `LogExported` (record)
+
+What an export that was written left beside its path.
+
+| Member | Description |
+|---|---|
+| `Optional<LogNotDeleted> NotDeleted` | The file it wrote over, when that could not be deleted once replaced; it may hold what the export left out |
+
+### `LogNotDeleted` (record)
+
+A file an export wrote over and could not delete once replaced.
+
+| Member | Description |
+|---|---|
+| `string Path` | Where it is: beside the export's path, as `.replaced`, or `.replaced-2` and on |
+| `string Reason` | Why it could not be deleted, in the disk's own words, closed as a sentence: with a full stop unless they end in one or in `?` or `!` |
 
 ### `LogSessionFile`
 
@@ -502,6 +532,7 @@ It is of the records that made it: `default`, or a mark of other records, has se
 | `int Count` | How many rows it has |
 | `LogRow this[int row]` | A row, from 0, the oldest |
 | `LogLevelCounts Counts` | How many records match, by level, everything the filter keeps but for its levels |
+| `long EventCount(int place)` | How many records match of the event at a place in `Source`'s events, everything the filter keeps but for its event terms; 0 for an event declared since it last read |
 | `long Lost` | How many records were lost before it read them |
 | `void Update()` | Reads what arrived since it last did, or goes on with a scan; once a frame |
 | `void Retry()` | Scans again when a regular expression of `Filter` took too long, to try it afresh; nothing when none did |
@@ -511,6 +542,7 @@ It is of the records that made it: `default`, or a mark of other records, has se
 | `Optional<int> Find(long sequence)` | The row that holds a record, or the repeat that spans it |
 | `int Read(int row, int count, LogBatch into)` | Copies the records of rows, one a row |
 | `void Write(ILogSink sink, int row, int count, LogSinkOptions? options = null)` | Writes every record the rows stand for to a sink not yet opened, as a drain would |
+| `void Write(ILogSink sink, IReadOnlyList<int> rows, LogSinkOptions? options = null)` | The same for rows that need not be one run, in order and each once, through one opening of the sink |
 
 ### `LogRow` (readonly record struct)
 
@@ -544,6 +576,7 @@ It is of the records that made it: `default`, or a mark of other records, has se
 | `IReadOnlyList<LogFilterTerm> Keep`, `LeaveOut` | The terms a record must meet, and must not |
 | `static Result<LogFilter> Parse(string query)` | Reads a query; fails with a `LogFilterError` code and the word |
 | `bool Matches(LogRecord record, LogScopes scopes)` | Whether a record is kept; a regular expression that takes too long over it does not match it |
+| `bool KeepsEvent(LogEventSpec spec)` | Whether its event terms keep records of an event: one it keeps, when it keeps any, and none it leaves out |
 | `IReadOnlyList<LogFilterTerm> MatchingNothing(IReadOnlyList<LogEventSpec> events)` | The events and fields it names that none of the events is or has |
 | `ToString()` | The query that reads back as it |
 
@@ -603,6 +636,7 @@ Its cases are its states:
 ### `LogSessionId` (readonly record struct)
 
 `long Value`: numbered from 1, in the order the process's sessions started or were opened; `default` is no session.
+Ids compare by `Value`, with `<`, `>`, `<=`, `>=` and `CompareTo`, so a later session's is the greater.
 
 ## Unity
 
@@ -619,4 +653,16 @@ Its cases are its states:
 | Member | Description |
 |---|---|
 | `Events.Logged` | The spec of `unity/Logged`, with the fields `Message`, `StackTrace` and `Type` |
+| `const string StackTraceField` | `StackTrace`, the field of `unity/Logged` that holds the stack Unity handed over |
 | `static LogLevel LevelOf(LogType type)` | The level a message of a Unity log type is captured at |
+
+### `UnityPaths`
+
+| Member | Description |
+|---|---|
+| `UnityPaths(string root, IReadOnlyList<(string Folder, string Name)> packages)` | Paths mapped against the project's folder, empty when not known, and each package's folder and name; a package of an empty or blank folder or name throws `ArgumentException`, and a null one `ArgumentNullException` |
+| `static UnityPaths ForThisProject()` | The paths of the project Unity is running: its folder, and in the editor every registered package's |
+| `string Map(string file)` | A call site's path as Unity opens it, `Assets/...` or `Packages/<name>/...`; one it cannot map is kept, with forward slashes |
+| `static string FileName(string path)` | The file's name, without its folder |
+
+A path is matched ignoring case on Windows and macOS, and by its case elsewhere.

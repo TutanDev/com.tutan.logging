@@ -1,0 +1,19 @@
+{
+    "name": "Tutan.Logging.Editor",
+    "rootNamespace": "Tutan.Logging.Editor",
+    "references": [
+        "GUID:ca8cfe6692804e79a28cc7437049dd0e",
+        "GUID:24c3fc5ca3568e8459fa78711f324a01"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -522,6 +522,147 @@ namespace Tutan.Logging.Tests
             copy.Update();
             Assert.That(Messages(copy), Is.EqualTo(new[] { "Saving slot 1", "Saved slot 1 as A.sav", "Signed in as [personal] from C:/Saves" }));
             Assert.That(copy[1].Depth, Is.EqualTo(1));
+            Assert.That(copy.Scopes.Elapsed(copy[0].Sequence).IsSome, Is.True, "The scope closed after the last row, and the copy says how long it took.");
+        }
+
+        [Test]
+        public void Writing_rows_writes_the_closing_of_each_opening_written_and_of_no_other()
+        {
+            LogStore store = Stores.Everything();
+            using (LogScope outer = store.Log.Saving(1))
+            {
+                outer.Log.Saved(1, "A.sav");
+                using (LogScope inner = outer.Log.Saving(2))
+                    inner.Log.Wrote(2);
+            }
+
+            store.Log.Step(3);
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+            Assert.That(Rows(view).Select(r => r.Sequence), Is.EqualTo(new[] { 1L, 2L, 3L, 4L, 7L }));
+
+            var all = new MemorySink();
+            view.Write(all, 0, view.Count);
+            var outerOnly = new MemorySink();
+            view.Write(outerOnly, 0, 1);
+            var under = new MemorySink();
+            view.Write(under, 1, 2);
+            var apart = new MemorySink();
+            view.Write(apart, new[] { 0, 4 });
+
+            Assert.That(all.Records.Select(r => r.Sequence), Is.EqualTo(new[] { 1L, 2L, 3L, 4L, 5L, 6L, 7L }));
+            Assert.That(outerOnly.Records.Select(r => r.Sequence), Is.EqualTo(new[] { 1L, 6L }),
+                "The closing lies after the row, and says how long the scope took.");
+            Assert.That(under.Records.Select(r => r.Sequence), Is.EqualTo(new[] { 2L, 3L, 5L }),
+                "The inner scope's opening is written, and so is its closing past the rows; the outer's opening is not, and nor is its closing.");
+            Assert.That(apart.Records.Select(r => r.Sequence), Is.EqualTo(new[] { 1L, 6L, 7L }),
+                "The outer scope's closing lies between the rows, where it is written in its place.");
+        }
+
+        [Test]
+        public void Rows_written_apart_are_written_through_one_opening_of_the_sink()
+        {
+            LogStore store = Stores.Everything();
+            for (int i = 1; i <= 5; i++)
+                store.Log.Step(i);
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+            var counting = new OpeningSink();
+            var stream = new MemoryStream();
+
+            view.Write(counting, new[] { 0, 2, 3 });
+            using (var sink = new JsonLinesSink(stream, leaveOpen: true))
+                view.Write(sink, new[] { 1, 4 });
+
+            Assert.That((counting.Opened, counting.Flushed), Is.EqualTo((1, 1)));
+            Assert.That(counting.Sequences, Is.EqualTo(new[] { 1L, 3L, 4L }));
+            LogSessionFile file = LogFile.Read(new MemoryStream(stream.ToArray()), "apart.jsonl")
+                .Match(error => throw new InvalidOperationException(error.Message), read => read);
+            Assert.That(file.Skipped, Is.Empty, "One header, and the records after it.");
+            var copy = new LogView(file.Archive, LogFilter.All);
+            copy.Update();
+            Assert.That(Messages(copy), Is.EqualTo(new[] { "Step 2", "Step 5" }));
+        }
+
+        [Test]
+        public void Rows_written_apart_are_in_order_each_once_and_of_the_view()
+        {
+            LogStore store = Stores.Everything();
+            for (int i = 1; i <= 3; i++)
+                store.Log.Step(i);
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+
+            Assert.Throws<ArgumentException>(() => view.Write(new OpeningSink(), new[] { 2, 1 }));
+            Assert.Throws<ArgumentException>(() => view.Write(new OpeningSink(), new[] { 1, 1 }));
+            Assert.Throws<ArgumentOutOfRangeException>(() => view.Write(new OpeningSink(), new[] { 0, 3 }));
+            Assert.Throws<ArgumentNullException>(() => view.Write(new OpeningSink(), (IReadOnlyList<int>)null!));
+            var none = new OpeningSink();
+            view.Write(none, Array.Empty<int>());
+            Assert.That((none.Opened, none.Flushed, none.Sequences.Count), Is.EqualTo((1, 1, 0)), "No rows is a sink opened and flushed with nothing in it.");
+        }
+
+        [Test]
+        public void A_view_counts_each_event_as_if_its_event_terms_kept_it()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Saved(1, "A.sav");
+            store.Log.Saved(1, "A.sav");
+            store.Log.Wrote(4);
+            store.Log.Heard(LogLevel.Warning, "a slot came loose");
+            var view = new LogView(store, Parse("tests.heard.* level>=information \"slot\""));
+            view.Update();
+
+            Assert.That(Messages(view), Is.EqualTo(new[] { "Heard a slot came loose" }));
+            Assert.That(view.EventCount(Place(store, "tests.save/Saved")), Is.EqualTo(2), "A repeat's every record, which its event terms alone leave out.");
+            Assert.That(view.EventCount(Place(store, "tests.save/Wrote")), Is.EqualTo(0), "Its level and its text leave it out.");
+            Assert.That(view.EventCount(Place(store, "tests.heard/Heard")), Is.EqualTo(1));
+            Assert.That(view.EventCount(store.Events.Count + 5), Is.EqualTo(0), "An event declared since the view read.");
+            Assert.Throws<ArgumentOutOfRangeException>(() => view.EventCount(-1));
+        }
+
+        [Test]
+        public void An_events_count_drops_what_the_store_overwrites()
+        {
+            LogStore store = Stores.Everything(Stores.Tiny);
+            for (int i = 0; i < 10; i++)
+                store.Log.Step(i);
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+            int step = Place(store, "tests.save/Step");
+            Assert.That(view.EventCount(step), Is.EqualTo(10));
+
+            for (int i = 0; i < 10; i++)
+                store.Log.Wrote(i);
+            view.Update();
+
+            Assert.That(store.First, Is.EqualTo(5), "The store holds sixteen records.");
+            Assert.That(view.EventCount(step), Is.EqualTo(6));
+            Assert.That(view.EventCount(Place(store, "tests.save/Wrote")), Is.EqualTo(10));
+            Assert.That(view.Counts.Trace, Is.EqualTo(6), "The counts by level drop the same records.");
+        }
+
+        [Test]
+        public void An_events_count_takes_in_a_record_placed_late_once()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Saved(1, "A.sav");
+            store.Log.Step(2);
+            store.Log.Saved(3, "C.sav");
+            LogBatch records = All(store);
+            LogArchive archive = Archive(store);
+            archive.Keep(records[0], backlog: false);
+            archive.Keep(records[2], backlog: false);
+            var view = new LogView(archive, LogFilter.All);
+            view.Update();
+            int saved = Place(archive, "tests.save/Saved");
+            Assert.That(view.EventCount(saved), Is.EqualTo(2));
+
+            archive.Keep(records[1], backlog: true);
+            view.Update();
+
+            Assert.That(view.EventCount(Place(archive, "tests.save/Step")), Is.EqualTo(1));
+            Assert.That(view.EventCount(saved), Is.EqualTo(2), "The records after it are read again, and counted once.");
         }
 
         [Test]
@@ -739,6 +880,40 @@ namespace Tutan.Logging.Tests
 
         /// <summary>An archive of the session <paramref name="store"/> writes, which the test hands records by hand.</summary>
         private static LogArchive Archive(LogStore store) => new LogArchive(store.Program, store.Clock, cap: 1000);
+
+        /// <summary>The place of the event <paramref name="key"/> in the events of <paramref name="records"/>.</summary>
+        private static int Place(LogRecords records, string key)
+        {
+            for (int place = 0; place < records.Events.Count; place++)
+            {
+                if (records.Events[place].Key == key)
+                    return place;
+            }
+
+            throw new InvalidOperationException($"The records have no event {key}.");
+        }
+
+        /// <summary>A sink that counts how often it is opened and flushed, and keeps the sequences written.</summary>
+        private sealed class OpeningSink : ILogSink
+        {
+            public int Opened { get; private set; }
+
+            public int Flushed { get; private set; }
+
+            public List<long> Sequences { get; } = new List<long>();
+
+            public string Name => "opening";
+
+            public void Open(LogContext context) => Opened++;
+
+            public void Write(LogRecord record, bool backlog, LogContext context) => Sequences.Add(record.Sequence);
+
+            public void Lost(long count, LogContext context)
+            {
+            }
+
+            public void Flush() => Flushed++;
+        }
 
         /// <summary>A sink that writes each record's message and, after a <c>&lt;</c>, the opening of the scope it is under.</summary>
         private sealed class ScopeNamingSink : ILogSink

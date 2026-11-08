@@ -60,5 +60,35 @@ namespace Tutan.Logging.Tests
 
             Assert.That(new string(text, 0, length), Is.EqualTo("from ~\\a and ~/b"));
         }
+
+        [Test]
+        public void A_context_gives_a_values_text_as_its_sink_leaves_it_out_and_an_exception_whole()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Lost("ann@example.com", new InvalidOperationException("Ann is gone."));
+            store.Log.Failed(1, new System.IO.IOException($"{s_home}/Saves/A.sav is locked."));
+            var batch = new LogBatch();
+            store.Read(store.First, batch);
+            LogRecord lost = batch[0];
+            LogRecord failed = batch[1];
+            LogContext everything = Context(store, LogRedaction.None);
+            LogContext personal = Context(store, LogRedaction.Personal);
+            LogContext home = Context(store, LogRedaction.HomeFolder);
+
+            Assert.That(everything.Text(lost.Field(0)), Is.EqualTo("ann@example.com"));
+            Assert.That(everything.Text(failed.Field(1)), Is.EqualTo(failed.Field(1).AsRef()!.ToString()), "An exception's whole text: its type, its message and any stack.");
+            Assert.That(everything.Text(failed.Field(1)), Does.StartWith("System.IO.IOException: "));
+            Assert.That(new[] { personal.Text(lost.Field(0)), personal.Text(lost.Field(1)), personal.Text(failed.Field(0)) },
+                Is.EqualTo(new[] { "[personal]", "[personal]", "1" }));
+            if (s_home.Length > 0)
+            {
+                Assert.That(home.Text(failed.Field(1)), Does.Contain("~/Saves/A.sav is locked."));
+                Assert.That(home.Text(failed.Field(1)), Does.Not.Contain(s_home));
+                Assert.That(home.Text(failed.Field(0)), Is.EqualTo("1"));
+            }
+        }
+
+        private static LogContext Context(LogStore store, LogRedaction redact) =>
+            new LogContext(store, new LogSinkOptions(LogLevel.Trace, Redact: redact), new ScopeTable());
     }
 }
