@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using NUnit.Framework;
 using Tutan.Functional;
@@ -291,7 +292,8 @@ namespace Tutan.Logging.Tests
             Assert.That(onEnded.Cleared(ended), Is.SameAs(onEnded), "An ended session is let go, as the sessions changing then says.");
             Assert.That(onFile.Cleared(live), Is.SameAs(onFile), "Another session than the one shown.");
             Assert.That(Folded(live.Id).Cleared(live).Folded, Is.EqualTo(ScopeSet.Empty));
-            Assert.Throws<ArgumentNullException>(() => onFile.Cleared(null!));
+            Assert.Throws<ArgumentNullException>(() => onFile.Cleared((LogConsoleSession)null!));
+            Assert.Throws<ArgumentNullException>(() => onFile.Cleared((IReadOnlyList<LogConsoleSession>)null!));
         }
 
         [Test]
@@ -403,6 +405,189 @@ namespace Tutan.Logging.Tests
             Assert.That(QueryLine.Written(LogFilter.All), Is.EqualTo(QueryLine.Empty));
         }
 
+        [Test]
+        public void A_saved_filter_pressed_shows_its_rows_and_pressed_again_what_was_shown_before()
+        {
+            SavedFilter errors = Saved("Errors", "level>=error");
+            SavedFilter saves = Saved("Saves", "tests.save.*");
+            ConsoleState typed = ConsoleState.Start.Type("tests.*");
+
+            ConsoleState on = typed.PressSaved(errors);
+            Assert.That((on.Query.Text, on.Filter), Is.EqualTo(("level>=error", errors.Filter)));
+            Assert.That(on.PressSaved(errors).Query, Is.EqualTo(typed.Query), "Pressed again, the line is what it was.");
+
+            ConsoleState other = on.PressSaved(saves);
+            Assert.That(other.Query.Text, Is.EqualTo("tests.save.*"), "Another saved filter's press shows its rows in place.");
+            Assert.That(other.PressSaved(saves).Query, Is.EqualTo(typed.Query), "Back to the line before the first saved filter was pressed.");
+            Assert.That(other.PressSaved(errors).PressSaved(errors).Query, Is.EqualTo(typed.Query));
+        }
+
+        [Test]
+        public void A_line_typed_or_pressed_after_a_saved_filter_is_the_line_to_go_back_to()
+        {
+            SavedFilter errors = Saved("Errors", "level>=error");
+            ConsoleState on = ConsoleState.Start.Type("tests.*").PressSaved(errors);
+
+            Assert.That(on.Type("tests.heard").PressSaved(errors).PressSaved(errors).Query.Text, Is.EqualTo("tests.heard"));
+            Assert.That(on.PressBadge(LogLevel.Warning).PressSaved(errors).PressSaved(errors).Query.Text, Is.EqualTo("level=warning"));
+            Assert.That(on.FilterToScope(3).PressSaved(errors).PressSaved(errors).Query.Text, Is.EqualTo("level>=error scope:3"),
+                "Every press that writes the line, a category's as a scope's, forgets the line before the saved filter.");
+            Assert.That(ConsoleState.Start.Type("level>=error").PressSaved(errors).Query, Is.EqualTo(QueryLine.Empty),
+                "A line that is a saved filter's is that filter on, and pressing it shows everything.");
+        }
+
+        [Test]
+        public void A_filter_saved_from_the_line_is_on_while_the_rows_are_of_it()
+        {
+            ConsoleState[] lines =
+            {
+                ConsoleState.Start.Type("tests.save.* -\"Shader warning\"").PressBadge(LogLevel.Warning),
+                ConsoleState.Start.Type("level>=warning tests.* -thread:2").FilterToScope(4),
+                ConsoleState.Start.Type("frame:1..9 tests.save.*"),
+            };
+
+            foreach (ConsoleState line in lines)
+                Assert.That(Saved("Line", line.Filter.ToString()).IsOn(line.Filter), Is.True, $"Save the Query as a Filter saves {line.Query.Text}, which is then on.");
+        }
+
+        [Test]
+        public void An_error_to_show_stops_following_and_selects_its_row_once_the_rows_have_it()
+        {
+            LogView view = ViewOf(5);
+            var id = new LogSessionId(1);
+            ConsoleState shown = ConsoleState.Start.Choose(id).ToggleFold(2).Select(Selection.Of(new[] { view[1].Sequence }, view[1].Sequence));
+
+            ConsoleState revealing = shown.Reveal(new UnseenError(id, view[3].Sequence));
+
+            Assert.That((revealing.Session, revealing.Revealing, revealing.Following), Is.EqualTo((F.Some(id), F.Some(view[3].Sequence), false)),
+                "Following would take the rows away from it.");
+            Assert.That((revealing.Folded, revealing.Selection), Is.EqualTo((shown.Folded, shown.Selection)), "The session shown keeps what is folded and selected of it, until its row is found.");
+
+            RevealStep.Found found = revealing.RevealIn(view).Match(
+                static _ => throw new AssertionException("It waits."), static found => found, static _ => throw new AssertionException("It is hidden."),
+                static _ => throw new AssertionException("It is gone."));
+            Assert.That(found.Index, Is.EqualTo(3));
+            Assert.That(found.Next.Selection.Focused, Is.EqualTo(F.Some(view[3].Sequence)));
+            Assert.That(found.Next.Revealing.IsNone, Is.True, "It is brought into sight once.");
+            Assert.That(found.Next.RevealIn(view), Is.SameAs(RevealStep.Waiting.Instance));
+            Assert.That(ConsoleState.Start.RevealIn(view), Is.SameAs(RevealStep.Waiting.Instance), "Nothing to bring into sight.");
+        }
+
+        [Test]
+        public void An_error_of_another_session_shows_that_session_afresh()
+        {
+            ConsoleState shown = ConsoleState.Start.Choose(new LogSessionId(1)).Select(Selection.Of(new[] { 2L }, 2L));
+
+            ConsoleState revealing = shown.Reveal(new UnseenError(new LogSessionId(2), 4));
+
+            Assert.That((revealing.Session, revealing.Selection, revealing.Revealing), Is.EqualTo((F.Some(new LogSessionId(2)), Selection.None, F.Some(4L))));
+            Assert.Throws<ArgumentException>(() => shown.Reveal(new UnseenError(default, 4)));
+            Assert.Throws<ArgumentOutOfRangeException>(() => shown.Reveal(new UnseenError(new LogSessionId(1), 0)));
+        }
+
+        [Test]
+        public void An_error_no_row_holds_is_said_to_be_hidden_and_is_brought_into_sight_no_more()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Saved(1, "A.sav");
+            long step = store.Next;
+            store.Log.Step(2);
+            var view = new LogView(store, Parse("level>=information"));
+            view.Update();
+            var id = new LogSessionId(1);
+
+            ConsoleState revealing = ConsoleState.Start.Choose(id).Reveal(new UnseenError(id, step));
+            RevealStep.Hidden hidden = revealing.RevealIn(view).Match(
+                static _ => throw new AssertionException("It waits."), static _ => throw new AssertionException("It is found."), static hidden => hidden,
+                static _ => throw new AssertionException("It is gone."));
+
+            Assert.That(hidden.Next.Revealing.IsNone, Is.True);
+            Assert.That(hidden.Next.Selection, Is.SameAs(revealing.Selection), "What was selected stays.");
+        }
+
+        [Test]
+        public void An_error_is_brought_into_sight_only_once_the_rows_were_scanned()
+        {
+            LogStore store = Stores.Everything();
+            long saved = store.Next;
+            store.Log.Saved(1, "A.sav");
+            var view = new LogView(store, LogFilter.All);
+            var id = new LogSessionId(1);
+            ConsoleState revealing = ConsoleState.Start.Choose(id).Reveal(new UnseenError(id, saved));
+
+            Assert.That(view.IsScanning, Is.True, "A view scans until it is first updated.");
+            Assert.That(revealing.RevealIn(view), Is.SameAs(RevealStep.Waiting.Instance));
+
+            view.Update();
+            Assert.That(revealing.RevealIn(view), Is.InstanceOf<RevealStep.Found>());
+        }
+
+        [Test]
+        public void An_error_let_go_or_of_a_session_let_go_is_said_to_be_gone_and_is_brought_into_sight_no_more()
+        {
+            LogStore store = Stores.Everything(Stores.Tiny);
+            long oldest = store.Next;
+            for (int slot = 0; slot < LogStore.MinRecords + 4; slot++)
+                store.Log.Saved(slot + 1, "A.sav");
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+            var id = new LogSessionId(1);
+            ConsoleState revealing = ConsoleState.Start.Choose(id).Reveal(new UnseenError(id, oldest));
+
+            Assert.That(store.First, Is.GreaterThan(oldest), "The store let its oldest records go.");
+            RevealStep.Gone gone = revealing.RevealIn(view).Match(
+                static _ => throw new AssertionException("It waits."), static _ => throw new AssertionException("It is found."),
+                static _ => throw new AssertionException("It is hidden."), static gone => gone);
+            Assert.That(gone.Next.Revealing.IsNone, Is.True);
+            Assert.That(gone.Next.Selection, Is.SameAs(revealing.Selection), "What was selected stays.");
+            Assert.That(revealing.RevealIn(F.None), Is.InstanceOf<RevealStep.Gone>(), "No rows while a session is to be shown: the process let it go.");
+            Assert.That(ConsoleState.Start.RevealIn(F.None), Is.SameAs(RevealStep.Waiting.Instance), "Nothing to bring into sight.");
+        }
+
+        [Test]
+        public void An_error_of_a_session_the_sessions_let_go_is_said_to_be_gone_before_another_is_chosen()
+        {
+            var sessions = new ConsoleSessions(live: true);
+            sessions.End(Start(sessions), s_clock.Started);
+            LogConsoleSession.Ended ended = (LogConsoleSession.Ended)sessions.Sessions[0];
+            LogConsoleSession.File file = sessions.Open(FileOf("a.jsonl"));
+            ConsoleState revealing = ConsoleState.Start.SessionsChanged(sessions.Sessions).Reveal(new UnseenError(file.Id, 1));
+            Assert.That(revealing.Session, Is.EqualTo(F.Some(file.Id)));
+            Assert.That(revealing.RevealAmong(sessions.Sessions), Is.SameAs(RevealStep.Waiting.Instance), "Its session is there, so the rows say.");
+
+            sessions.Close(file);
+            RevealStep.Gone gone = revealing.RevealAmong(sessions.Sessions).Match(
+                static _ => throw new AssertionException("It waits."), static _ => throw new AssertionException("It is found."),
+                static _ => throw new AssertionException("It is hidden."), static gone => gone);
+            Assert.That(gone.Next.Revealing.IsNone, Is.True);
+            Assert.That(gone.Next.Session, Is.EqualTo(F.Some(file.Id)), "The sessions choose another after.");
+            Assert.That(gone.Next.SessionsChanged(sessions.Sessions).Session, Is.EqualTo(F.Some(ended.Id)));
+
+            ConsoleState chosen = revealing.SessionsChanged(sessions.Sessions);
+            Assert.That((chosen.Session, chosen.Revealing.IsNone), Is.EqualTo((F.Some(ended.Id), true)),
+                "Choosing another ends the reveal saying nothing, which is why it is asked first.");
+            Assert.That(ConsoleState.Start.RevealAmong(sessions.Sessions), Is.SameAs(RevealStep.Waiting.Instance), "Nothing to bring into sight.");
+            Assert.Throws<ArgumentNullException>(() => revealing.RevealAmong(null!));
+        }
+
+        [Test]
+        public void Following_selecting_or_a_clear_ends_bringing_an_error_into_sight()
+        {
+            var sessions = new ConsoleSessions(live: true);
+            LogConsoleSession.Live live = Start(sessions);
+            ConsoleState revealing = ConsoleState.Start.Choose(live.Id).Reveal(new UnseenError(live.Id, 4));
+
+            ConsoleState followed = revealing.Follow();
+            Assert.That((followed.Revealing.IsNone, followed.Following), Is.EqualTo((true, true)));
+            Assert.That(revealing.Select(Selection.Of(new[] { 2L }, 2L)).Revealing.IsNone, Is.True, "The developer chose another row.");
+            Assert.That(revealing.Cleared(live).Revealing.IsNone, Is.True, "The rows it was in are gone.");
+            Assert.That(revealing.Cleared(sessions.Sessions), Is.EqualTo(revealing.Cleared(live)), "Of the sessions before a clear, the one shown is the one cleared.");
+            Assert.That(revealing.Cleared(Array.Empty<LogConsoleSession>()), Is.SameAs(revealing), "A clear of sessions it does not show changes nothing.");
+            Assert.That(ConsoleState.Start.Cleared(sessions.Sessions), Is.SameAs(ConsoleState.Start));
+            Assert.That(revealing.StopFollowing(), Is.SameAs(revealing));
+            Assert.That(ConsoleState.Start.Follow(), Is.SameAs(ConsoleState.Start));
+        }
+
         /// <summary>A view of <paramref name="records"/> records, a row each.</summary>
         private static LogView ViewOf(int records)
         {
@@ -431,6 +616,9 @@ namespace Tutan.Logging.Tests
 
             return LogFile.Read(new MemoryStream(stream.ToArray()), name).Match(error => throw new InvalidOperationException(error.Message), file => file);
         }
+
+        private static SavedFilter Saved(string name, string query) =>
+            SavedFilter.Of(name, query, F.None).Match(error => throw new InvalidOperationException(error.Message), saved => saved);
 
         private static LogFilter Parse(string query) =>
             LogFilter.Parse(query).Match(error => throw new InvalidOperationException(error.Message), filter => filter);

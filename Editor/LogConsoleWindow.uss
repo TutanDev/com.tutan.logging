@@ -13,6 +13,7 @@
     --mark: #1D6FB8;
     --source-back: rgba(0, 0, 0, 0.06);
     --current-line: rgba(229, 181, 59, 0.28);
+    --saved-on: rgba(29, 111, 184, 0.18);
 }
 
 .log-console.dark {
@@ -28,6 +29,7 @@
     --mark: #4FA3E0;
     --source-back: rgba(0, 0, 0, 0.22);
     --current-line: rgba(229, 181, 59, 0.18);
+    --saved-on: rgba(79, 163, 224, 0.25);
 }
 
 /* Toolbar */
@@ -62,6 +64,51 @@
 .status {
     -unity-text-align: middle-right;
     padding: 0 6px;
+    color: var(--secondary);
+}
+
+/* The Clear button's menu sits against it, an arrow alone. */
+.clear {
+    border-right-width: 0;
+}
+
+.clear-menu {
+    min-width: 16px;
+    padding: 0 2px;
+}
+
+/* Saved filters, a row of buttons under the toolbar */
+
+.saved {
+    flex-direction: row;
+    align-items: center;
+    padding: 0 6px;
+}
+
+.saved > .swatch {
+    width: 8px;
+    height: 8px;
+    margin-right: 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.saved > Label {
+    margin: 0;
+    padding: 0;
+}
+
+.saved.on {
+    background-color: var(--saved-on);
+}
+
+.saved.on > Label {
+    -unity-font-style: bold;
+}
+
+.saved-add {
+    min-width: 22px;
+    -unity-text-align: middle-center;
     color: var(--secondary);
 }
 
@@ -382,4 +429,100 @@
 
 .details .source-line > .code {
     white-space: nowrap;
+}
+
+/* The dialogs that save a filter and choose a category's colour */
+
+.log-console-dialog {
+    padding: 8px 10px;
+}
+
+.dialog-refused {
+    min-height: 16px;
+    margin: 4px 3px 0 3px;
+    white-space: normal;
+    color: var(--error);
+}
+
+.dialog-buttons {
+    flex-direction: row;
+    justify-content: flex-end;
+    margin-top: 6px;
+}
+
+.dialog-buttons > Button {
+    min-width: 72px;
+}
+
+/* Project Settings > Log Console */
+
+.log-console-settings {
+    padding: 1px 10px 10px 10px;
+}
+
+.log-console-settings > .settings-title {
+    font-size: 19px;
+    -unity-font-style: bold;
+    margin: 2px 0 6px 0;
+}
+
+.log-console-settings > .settings-header {
+    -unity-font-style: bold;
+    margin-top: 14px;
+    margin-bottom: 2px;
+}
+
+.log-console-settings > .settings-note {
+    white-space: normal;
+    color: var(--secondary);
+    margin-bottom: 4px;
+}
+
+.log-console-settings > HelpBox {
+    margin: 4px 0;
+}
+
+.settings-row {
+    flex-direction: row;
+    align-items: center;
+    min-height: 22px;
+}
+
+.settings-row > .swatch {
+    width: 12px;
+    height: 12px;
+    margin: 0 6px 0 2px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.settings-row > .settings-name {
+    width: 160px;
+    flex-shrink: 0;
+    -unity-font-style: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-row > .settings-query {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--secondary);
+}
+
+.settings-row > .settings-button {
+    flex-shrink: 0;
+}
+
+.log-console-settings > .settings-add {
+    align-self: flex-start;
+    margin-top: 4px;
+}
+
+.log-console-settings > .settings-left-out {
+    margin: 0;
 }

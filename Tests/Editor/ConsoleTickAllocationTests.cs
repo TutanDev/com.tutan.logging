@@ -108,6 +108,35 @@ namespace Tutan.Logging.Tests
             Assert.That(window.Bound.Cells(3).Duration, Is.Not.EqualTo("open"));
         }
 
+        [Test]
+        public void A_tick_while_an_error_waits_for_its_row_allocates_nothing()
+        {
+            using var session = new Session();
+            LogScope open = Write(session.Store);
+            session.Pump();
+            var window = new Window(session.Records);
+            LogView view = window.Bound.View;
+            window.Tick();
+
+            // A fold has the rows scanned again, so the error waits for its row while the scan catches up.
+            window.Show(window.State.ToggleFold(view[3].Sequence).Reveal(new UnseenError(new LogSessionId(1), view[5].Sequence)));
+            ConsoleState revealing = window.State;
+            Optional<LogView> rows = view;
+            Assert.That(view.IsScanning, Is.True, "A fold scans the rows again.");
+            Assert.That(revealing.RevealIn(rows), Is.SameAs(RevealStep.Waiting.Instance));
+
+            // What the window's tick reads of it while it waits.
+            void Waiting()
+            {
+                if (revealing.Revealing.IsSome)
+                    _ = revealing.RevealIn(rows);
+            }
+
+            Waiting();
+            Assert.That(Waiting, Is.Not.AllocatingGCMemory());
+            open.Dispose();
+        }
+
         /// <summary>
         /// A repeat, a scope that closed with a row under it, a scope still open with a row under it,
         /// and a row after, all at the top: the scope still open is returned, for the test to close.
@@ -156,6 +185,11 @@ namespace Tutan.Logging.Tests
         /// </summary>
         private sealed class Window
         {
+            /// <summary>The colours the team chose, as the window draws them: one for a category the rows are under, and one for a category they are not.</summary>
+            private static readonly CategoryColours s_colours = CategoryColours.None
+                .Choosing(Category("tests"), new ChosenColour(255, 0, 0))
+                .Choosing(Category("game.net"), new ChosenColour(0, 0, 255));
+
             private RowCells?[] _cells = new RowCells?[8];
             private long[] _counts = new long[8];
             private Optional<LogConsoleWindow.RowsMarks> _marks;
@@ -163,7 +197,7 @@ namespace Tutan.Logging.Tests
             public Window(LogRecords records)
             {
                 State = ConsoleState.Start.StopFollowing().Choose(new LogSessionId(1));
-                Bound = LogConsoleWindow.Bound.Of(records, State);
+                Bound = LogConsoleWindow.Bound.Of(records, State, LeftOut.None);
             }
 
             public ConsoleState State { get; private set; }
@@ -182,7 +216,7 @@ namespace Tutan.Logging.Tests
             /// <summary>Makes <paramref name="next"/> the state, as an input does.</summary>
             public void Show(ConsoleState next)
             {
-                Bound.Show(State, next);
+                Bound.Show(State, next, LeftOut.None);
                 State = next;
             }
 
@@ -203,7 +237,7 @@ namespace Tutan.Logging.Tests
                     _ = TextLinesSink.Short(cells.Row.Level);
                     for (int level = 0; level < LevelLook.Shown.Count; level++)
                         _ = LevelLook.Class(LevelLook.Shown[level]);
-                    _ = CategoryHue.Colour(cells.Category, dark: true);
+                    _ = Look.Category(cells.Category, s_colours, dark: true);
                 }
 
                 LogConsoleWindow.RowsMarks marks = Bound.Marks(State);
@@ -221,7 +255,7 @@ namespace Tutan.Logging.Tests
                     CategoryNode node = tree.Nodes[i];
                     _ = tree.Shown(node, State.Filter);
                     _ = node.Label;
-                    _ = CategoryHue.Colour(node.Category, dark: true);
+                    _ = Look.Category(node.Category, s_colours, dark: true);
                     long count = tree.Count(node, view);
                     counted |= count != _counts[i];
                     _counts[i] = count;
@@ -230,6 +264,9 @@ namespace Tutan.Logging.Tests
                 Drew = drew;
                 Counted = counted;
             }
+
+            private static CategoryName Category(string name) =>
+                CategoryName.Of(name).Match(static error => throw new InvalidOperationException(error.Message), static category => category);
 
             /// <summary>Makes <paramref name="items"/> hold at least <paramref name="count"/>, which allocates only as the rows or the categories grow, as warming up does.</summary>
             private static void Grow<T>(ref T[] items, int count)

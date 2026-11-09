@@ -62,20 +62,30 @@ namespace Tutan.Logging.Editor
             /// <summary>What of the rows the lines under the query line are of.</summary>
             public RowsSaid Said => new RowsSaid(View.Shown, _scans, View.Source.Events.Count, View.GaveUp.Count, View.Lost);
 
-            /// <summary>A view of <paramref name="records"/> as <paramref name="state"/> asks: its filter, and the scopes it folds.</summary>
-            public static Bound Of(LogRecords records, ConsoleState state)
+            /// <summary>A view of <paramref name="records"/> as <paramref name="state"/> asks: its filter, leaving out <paramref name="leftOut"/> after it, and the scopes it folds.</summary>
+            public static Bound Of(LogRecords records, ConsoleState state, LeftOut leftOut)
             {
-                var bound = new Bound(new LogView(records, state.Filter));
+                if (leftOut is null)
+                    throw new System.ArgumentNullException(nameof(leftOut));
+
+                var bound = new Bound(new LogView(records, leftOut.From(state.Filter)));
                 bound.Refold(ScopeSet.Empty, state.Folded);
                 return bound;
             }
 
-            /// <summary>Makes the view show what <paramref name="now"/> asks: its filter, and the scopes it folds where they changed since <paramref name="was"/>.</summary>
-            public void Show(ConsoleState was, ConsoleState now)
+            /// <summary>
+            /// Makes the view show what <paramref name="now"/> asks: its filter, leaving out <paramref name="leftOut"/>
+            /// after it, and the scopes it folds where they changed since <paramref name="was"/>.
+            /// </summary>
+            public void Show(ConsoleState was, ConsoleState now, LeftOut leftOut)
             {
-                if (!now.Filter.Equals(View.Filter))
+                if (leftOut is null)
+                    throw new System.ArgumentNullException(nameof(leftOut));
+
+                LogFilter filter = leftOut.From(now.Filter);
+                if (!filter.Equals(View.Filter))
                 {
-                    View.Filter = now.Filter;
+                    View.Filter = filter;
                     _scans++;
                 }
 

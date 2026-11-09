@@ -27,8 +27,30 @@ namespace Tutan.Logging.Editor
         private VisualElement MakeCategory()
         {
             var item = new CategoryElement();
-            item.RegisterCallback<ClickEvent>(click => PressCategory(item.Index, click));
+            item.RegisterCallback<ClickEvent>(click =>
+            {
+                // The right button opens the category's menu, and presses nothing.
+                if (click.button == 0)
+                    PressCategory(item.Index, click);
+            });
+            item.AddManipulator(new ContextualMenuManipulator(menu => CategoryMenu(item.Index, menu)));
             return item;
+        }
+
+        /// <summary>The menu of the category at <paramref name="index"/>: the colour the team draws it in.</summary>
+        private void CategoryMenu(int index, ContextualMenuPopulateEvent menu)
+        {
+            CategoryTree tree = Tree;
+            if (index < 0 || index >= tree.Nodes.Count || !CategoryName.Of(tree.Nodes[index].Category).IsSuccess(out CategoryName category))
+            {
+                menu.menu.AppendAction("Choose Colour...", static _ => { }, DropdownMenuAction.Status.Disabled);
+                menu.menu.AppendAction("Use the Name's Colour", static _ => { }, DropdownMenuAction.Status.Disabled);
+                return;
+            }
+
+            menu.menu.AppendAction("Choose Colour...", _ => CategoryColourWindow.Open(category, Colour(category.Value)));
+            DropdownMenuAction.Status chosen = ConsoleSettings.Shared.Colours.IsChosen(category) ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled;
+            menu.menu.AppendAction("Use the Name's Colour", _ => ChangeShared(shared => shared.Colouring(shared.Colours.Unchoosing(category))), chosen);
         }
 
         private void BindCategory(VisualElement element, int index)

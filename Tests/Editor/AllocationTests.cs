@@ -144,7 +144,9 @@ namespace Tutan.Logging.Tests
                 Frame();
 
             // Three frames write past a quarter of what the store holds, so the scopes forget what it overwrote.
-            Assert.That(() => { Frame(); Frame(); Frame(); }, Is.Not.AllocatingGCMemory());
+            void Frames() { Frame(); Frame(); Frame(); }
+            Frames();
+            Assert.That(Frames, Is.Not.AllocatingGCMemory());
             Assert.That(view.Count, Is.GreaterThan(0));
         }
 
@@ -174,7 +176,9 @@ namespace Tutan.Logging.Tests
                 Frame();
 
             // Three frames keep more than three of its blocks of sixteen.
-            Assert.That(() => { Frame(); Frame(); Frame(); }, Is.Not.AllocatingGCMemory());
+            void Frames() { Frame(); Frame(); Frame(); }
+            Frames();
+            Assert.That(Frames, Is.Not.AllocatingGCMemory());
             Assert.That(sessions.Sessions[0].Records.Dropped, Is.GreaterThan(0));
         }
 

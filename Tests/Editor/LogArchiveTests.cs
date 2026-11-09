@@ -857,6 +857,94 @@ namespace Tutan.Logging.Tests
             Assert.That((archive.Count, archive.Capacity), Is.EqualTo((1, 1)));
         }
 
+        [Test]
+        public void An_archive_counts_the_errors_it_holds_from_a_sequence_on_and_not_an_errors_backlog()
+        {
+            var full = new InvalidOperationException("The disk is full.");
+            LogStore store = Stores.Everything();
+            store.Log.Saved(1, "A.sav");
+            store.Log.Failed(1, full);
+            store.Log.Step(2);
+            store.Log.Failed(2, full);
+            store.Log.Heard(LogLevel.Critical, "The disk is gone.");
+            store.Log.Heard(LogLevel.Warning, "The disk is nearly full.");
+            LogBatch records = All(store);
+            long[] at = Enumerable.Range(0, records.Count).Select(i => records[i].Sequence).ToArray();
+            var archive = new LogArchive(store.Program, store.Clock, cap: 100);
+
+            // The second failure is kept as the backlog of an error a sink was handed, as a sink of critical records keeps it.
+            for (int i = 0; i < records.Count; i++)
+                archive.Keep(records[i], backlog: i == 3);
+
+            Assert.That(archive.ErrorsFrom(0), Is.EqualTo(new LogErrorsHeld(2, at[1], at[4], archive.Next)), "An error and a critical record; a backlog is no error of its own.");
+            Assert.That(archive.ErrorsFrom(at[1] + 1), Is.EqualTo(new LogErrorsHeld(1, at[4], at[4], archive.Next)));
+            Assert.That(archive.ErrorsFrom(archive.Next), Is.EqualTo(new LogErrorsHeld(archive.Next)));
+        }
+
+        [Test]
+        public void An_error_placed_late_counts_where_it_goes_and_one_let_go_is_not_held()
+        {
+            // A cap of 4 holds blocks of one.
+            var archive = new LogArchive("Tests", default, cap: 4);
+            Step(archive, 2, LogLevel.Error);
+            Step(archive, 3);
+            Step(archive, 6, LogLevel.Critical);
+            Step(archive, 4, LogLevel.Error);
+
+            Assert.That(archive.ErrorsFrom(0), Is.EqualTo(new LogErrorsHeld(3, 2, 6, 7)));
+            Assert.That(archive.ErrorsFrom(3), Is.EqualTo(new LogErrorsHeld(2, 4, 6, 7)), "The late one is counted where its sequence goes.");
+            Assert.That(archive.ErrorsFrom(5), Is.EqualTo(new LogErrorsHeld(1, 6, 6, 7)), "From a sequence after it, as where a session was last seen, the late one is not counted.");
+
+            Step(archive, 7);
+            Assert.That(archive.ErrorsFrom(0), Is.EqualTo(new LogErrorsHeld(2, 4, 6, 8)), "The error let go past the cap is not held.");
+
+            archive.Clear();
+            Assert.That(archive.ErrorsFrom(0), Is.EqualTo(new LogErrorsHeld(8)), "A clear lets every error go.");
+            Step(archive, 9, LogLevel.Error);
+            Assert.That(archive.ErrorsFrom(0), Is.EqualTo(new LogErrorsHeld(1, 9, 9, 10)));
+        }
+
+        [Test]
+        public void An_archive_counts_the_errors_it_holds_however_late_they_come_and_however_many_it_lets_go()
+        {
+            // A cap of 40 holds blocks of 10, so blocks go while the run of errors grows, moves and has late ones placed in it.
+            var archive = new LogArchive("Tests", default, cap: 40);
+            var random = new System.Random(7);
+            var heldBack = new List<long>();
+            for (long sequence = 1; sequence <= 300; sequence++)
+            {
+                if (random.Next(5) == 0)
+                {
+                    heldBack.Add(sequence);
+                    continue;
+                }
+
+                Step(archive, sequence, LevelOf(sequence));
+                if (heldBack.Count > 0 && random.Next(3) == 0)
+                {
+                    foreach (long late in heldBack)
+                        Step(archive, late, LevelOf(late));
+                    heldBack.Clear();
+                }
+
+                long middle = (archive.First + archive.Next) / 2;
+                Assert.That((archive.ErrorsFrom(0), archive.ErrorsFrom(middle)), Is.EqualTo((ErrorsOf(archive, 0), ErrorsOf(archive, middle))), $"After {sequence}.");
+            }
+        }
+
+        [Test]
+        public void An_archive_of_errors_past_its_cap_counts_every_error_it_holds()
+        {
+            var archive = new LogArchive("Tests", default, cap: 40);
+            for (long sequence = 1; sequence <= 100; sequence++)
+                Step(archive, sequence, LogLevel.Error);
+            for (long sequence = 99; sequence > 70; sequence -= 7)
+                Assert.That(Step(archive, sequence, LogLevel.Error), Is.False, "It holds them already.");
+
+            Assert.That(archive.ErrorsFrom(0), Is.EqualTo(new LogErrorsHeld(archive.Count, archive.First, 100, 101)), "Every record it holds is an error.");
+            Assert.That(archive.ErrorsFrom(90).Count, Is.EqualTo(11));
+        }
+
         private static InvalidDataException Thrown()
         {
             try
@@ -897,14 +985,30 @@ namespace Tutan.Logging.Tests
             return batch;
         }
 
-        /// <summary>Hands <paramref name="archive"/> a step of the value <paramref name="sequence"/> under that sequence, as a file's reader does: whether it kept it.</summary>
-        private static bool Step(LogArchive archive, long sequence)
+        /// <summary>A record of every third sequence is information, and the others errors.</summary>
+        private static LogLevel LevelOf(long sequence) => sequence % 3 == 0 ? LogLevel.Information : LogLevel.Error;
+
+        /// <summary>The errors <paramref name="archive"/> holds from <paramref name="from"/> on, as its records say, read the long way.</summary>
+        private static LogErrorsHeld ErrorsOf(LogArchive archive, long from)
+        {
+            long[] errors = Held.Records(archive)
+                .Where(record => record.Kind == LogRecordKind.Event && record.Level >= LogLevel.Error && !record.Backlog && record.Sequence >= from)
+                .Select(static record => record.Sequence)
+                .ToArray();
+            return errors.Length == 0 ? new LogErrorsHeld(archive.Next) : new LogErrorsHeld(errors.Length, errors[0], errors[errors.Length - 1], archive.Next);
+        }
+
+        /// <summary>
+        /// Hands <paramref name="archive"/> a step of the value <paramref name="sequence"/> under that
+        /// sequence, at <paramref name="level"/>, as a file's reader does: whether it kept it.
+        /// </summary>
+        private static bool Step(LogArchive archive, long sequence, LogLevel level = LogLevel.Trace)
         {
             var entry = new LogEntry
             {
                 Sequence = sequence,
                 Event = archive.Declare(SaveLog.Events.Step),
-                Level = LogLevel.Trace,
+                Level = level,
                 Kind = LogRecordKind.Event,
                 Bits = 1,
             };

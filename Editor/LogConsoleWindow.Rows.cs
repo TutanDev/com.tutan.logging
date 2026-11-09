@@ -39,7 +39,7 @@ namespace Tutan.Logging.Editor
                 if (command.commandName != "Copy")
                     return;
 
-                Copy(json: false, LeftOut);
+                Copy(json: false, Redacted);
                 command.StopPropagation();
             });
 
@@ -107,9 +107,9 @@ namespace Tutan.Logging.Editor
             row.EnableInClassList("scope", scope);
         }
 
-        /// <summary>The colour <paramref name="category"/> is drawn in, for the skin the parts are drawn for.</summary>
+        /// <summary>The colour <paramref name="category"/> is drawn in: the one the team chose for it, or its name's hue for the skin the parts are drawn for.</summary>
         private Color Colour(string category) =>
-            CategoryHue.Colour(category, _parts.HasValue(out Parts parts) ? parts.Dark : EditorGUIUtility.isProSkin);
+            Look.Category(category, ConsoleSettings.Shared.Colours, _parts.HasValue(out Parts parts) ? parts.Dark : EditorGUIUtility.isProSkin);
 
         /// <summary>The list selected <paramref name="indexes"/>: the state selects their rows, and the list shows them already.</summary>
         private void Selected(IEnumerable<int> indexes)
@@ -153,8 +153,8 @@ namespace Tutan.Logging.Editor
         {
             SelectedRows selected = SelectedNow();
             DropdownMenuAction.Status copy = selected.Indexes.Count > 0 ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled;
-            menu.menu.AppendAction("Copy", _ => Copy(json: false, LeftOut), copy);
-            menu.menu.AppendAction("Copy as JSON Lines", _ => Copy(json: true, LeftOut), copy);
+            menu.menu.AppendAction("Copy", _ => Copy(json: false, Redacted), copy);
+            menu.menu.AppendAction("Copy as JSON Lines", _ => Copy(json: true, Redacted), copy);
             menu.menu.AppendAction("Copy, Nothing Left Out/As Text", _ => Copy(json: false, LogRedaction.None), copy);
             menu.menu.AppendAction("Copy, Nothing Left Out/As JSON Lines", _ => Copy(json: true, LogRedaction.None), copy);
             menu.menu.AppendSeparator();

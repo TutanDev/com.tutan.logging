@@ -493,10 +493,26 @@ A console sink keeps one for its session, and `LogFile.Read` makes one from a fi
 |---|---|
 | `int Count` | How many records it holds |
 | `long Dropped` | How many of its oldest it let go to stay under its cap, since it was last cleared |
+| `LogErrorsHeld ErrorsFrom(long sequence)` | The errors it holds from a sequence on, and where it is now, read at once, without allocating |
+
+An error is an event's record at `Error` or `Critical` that was not written as an error's backlog.
+An error it let go, past its cap or on a clear, is not held, so it is not counted.
 
 A console's `Clear` lets every record go: `First` and `Next` are then where it stopped, and it takes no record older.
 A record older than what it let go is let go too, and so is one older than all it holds while it is full.
 A file's archive, and an ended session's, hold what they held, and take nothing after.
+
+### `LogErrorsHeld` (readonly record struct)
+
+What `ErrorsFrom` read of an archive's errors.
+Only an archive makes one, so its count and its ends always agree.
+
+| Member | Description |
+|---|---|
+| `long Count` | How many errors it holds from the sequence on |
+| `Optional<long> First` | The sequence of the first of them: none when there are none |
+| `Optional<long> Last` | The sequence of the newest of them: none when there are none |
+| `long Next` | The archive's `Next`, read with them |
 
 ### `LogLateMark` (readonly record struct)
 

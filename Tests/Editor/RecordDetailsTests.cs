@@ -595,19 +595,47 @@ namespace Tutan.Logging.Tests
             var view = new LogView(store, state.Filter);
             view.Update();
 
-            ReadOnlyCollection<SaidLine> said = SaidLines.Of(F.Some<Told>(new Told.Trouble("The file is locked")), state.Query, F.Some(view), F.None);
+            ReadOnlyCollection<SaidLine> said = SaidLines.Of(F.Some<Told>(new Told.Trouble("The file is locked")), state.Query, F.Some(view), F.None, LeftOut.None);
 
             Assert.That(said.Select(static line => line.Kind), Is.EqualTo(new[] { SaidKind.Trouble, SaidKind.Refused, SaidKind.MatchingNothing }));
             Assert.That(said[0].Text, Is.EqualTo("The file is locked."));
             Assert.That(said[1].Text, Does.Match(@"(?<![.?!])[.?!] The rows are of the last query that read\.$"),
                 "The query's words, an open clause, are closed before the line goes on.");
             Assert.That(said[2].Text, Does.StartWith("No event of this session is or has nothing.here."));
-            Assert.That(SaidLines.Of(F.None, state.Query, F.None, F.None).Select(static line => line.Kind), Is.EqualTo(new[] { SaidKind.Refused }),
+            Assert.That(SaidLines.Of(F.None, state.Query, F.None, F.None, LeftOut.None).Select(static line => line.Kind), Is.EqualTo(new[] { SaidKind.Refused }),
                 "With no rows, only what the query says.");
-            Assert.That(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None), Is.Empty);
-            Assert.That(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None), Is.EqualTo(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None)),
+            Assert.That(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None, LeftOut.None), Is.Empty);
+            Assert.That(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None, LeftOut.None), Is.EqualTo(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None, LeftOut.None)),
                 "Said alike, they are equal, so the window draws them again only when they changed.");
-            Assert.Throws<ArgumentNullException>(() => SaidLines.Of(F.None, null!, F.None, F.None));
+            Assert.Throws<ArgumentNullException>(() => SaidLines.Of(F.None, null!, F.None, F.None, LeftOut.None));
+        }
+
+        [Test]
+        public void An_error_let_go_before_it_could_be_shown_is_said_with_no_rows()
+        {
+            ReadOnlyCollection<SaidLine> said = SaidLines.Of(F.Some<Told>(Told.Gone.Instance), QueryLine.Empty, F.None, F.None, LeftOut.None);
+
+            Assert.That(said.Select(static line => line.Kind), Is.EqualTo(new[] { SaidKind.Gone }), "As a press for a session let go draws it.");
+            Assert.That(said[0].Text, Is.EqualTo("The error the toolbar showed was let go before it could be shown: past its session's cap, by a clear, or with its session."));
+        }
+
+        [Test]
+        public void What_the_project_always_leaves_out_is_said_last_while_rows_are_shown()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Saved(1, "A.sav");
+            LeftOut always = LeftOut.Parse("-unity/Logged").Match(error => throw new InvalidOperationException(error.Message), leftOut => leftOut);
+            var view = new LogView(store, always.From(LogFilter.All));
+            view.Update();
+
+            ReadOnlyCollection<SaidLine> said = SaidLines.Of(F.Some<Told>(Told.Hidden.Instance), QueryLine.Empty, F.Some(view), F.None, always);
+
+            Assert.That(said.Select(static line => line.Kind), Is.EqualTo(new[] { SaidKind.Hidden, SaidKind.LeftOut }));
+            Assert.That(said[0].Text, Does.StartWith("The error the toolbar showed is not among the rows: "));
+            Assert.That(said[1].Text, Is.EqualTo("The project always leaves out -unity/Logged."), "The line does not show it, so it is said.");
+            Assert.That(SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.None, LeftOut.None), Is.Empty, "Nothing left out says nothing.");
+            Assert.That(SaidLines.Of(F.None, QueryLine.Empty, F.None, F.None, always), Is.Empty, "With no rows, nothing is left out of them.");
+            Assert.Throws<ArgumentNullException>(() => SaidLines.Of(F.None, QueryLine.Empty, F.None, F.None, null!));
         }
 
         [TestCase("Held by a scanner", "Held by a scanner.")]
@@ -628,7 +656,7 @@ namespace Tutan.Logging.Tests
             Assert.That(said.Kind, Is.EqualTo(SaidKind.NotDeleted), "A warning, not trouble: the export was written.");
             Assert.That(said.Text, Does.StartWith("The rows were exported to C:/Logs/Game export.jsonl."));
             Assert.That(said.Text, Does.Contain("is now C:/Logs/Game export.jsonl.replaced-2, and could not be deleted: The file is in use. "));
-            Assert.That(SaidLines.Of(F.Some(told), QueryLine.Empty, F.None, F.None), Is.EqualTo(new[] { said }), "It is said as it was told.");
+            Assert.That(SaidLines.Of(F.Some(told), QueryLine.Empty, F.None, F.None, LeftOut.None), Is.EqualTo(new[] { said }), "It is said as it was told.");
         }
 
         [Test]
@@ -639,7 +667,7 @@ namespace Tutan.Logging.Tests
             var view = new LogView(file.Records, LogFilter.All);
             view.Update();
 
-            ReadOnlyCollection<SaidLine> said = SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.Some<LogConsoleSession>(file));
+            ReadOnlyCollection<SaidLine> said = SaidLines.Of(F.None, QueryLine.Empty, F.Some(view), F.Some<LogConsoleSession>(file), LeftOut.None);
 
             Assert.That(said.Select(static line => line.Kind), Is.EqualTo(new[] { SaidKind.Skipped }));
             Assert.That(said[0].Text, Does.StartWith("A line of the file could not be read: Line "));

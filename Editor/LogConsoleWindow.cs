@@ -24,16 +24,22 @@ namespace Tutan.Logging.Editor
     /// part of the window is drawn again only when what it shows changed.
     /// </para>
     /// <para>
+    /// The chrome is the editor's, one for every window: <see cref="ConsoleChrome"/> clears the console
+    /// and tells each window, and counts the errors no window has shown, which each window tells the
+    /// session it shows while it is visible. <see cref="ConsoleSettings"/> holds what the team shares
+    /// and what the developer keeps, and each window draws again when they change.
+    /// </para>
+    /// <para>
     /// A shortcut that opens it is registered with no key, for a developer to bind in Edit > Shortcuts.
     /// </para>
     /// </remarks>
     internal sealed partial class LogConsoleWindow : EditorWindow
     {
         // Loaded by GUID, from the .meta beside it: its path depends on how the package was installed.
-        private const string StyleGuid = "5e11c617538f44b0adebc3b90288d55b"; // LogConsoleWindow.uss
+        internal const string StyleGuid = "5e11c617538f44b0adebc3b90288d55b"; // LogConsoleWindow.uss
 
         // What a copy or an export leaves out, unless the developer picks the item that says it does not.
-        private const LogRedaction LeftOut = LogRedaction.Personal | LogRedaction.HomeFolder;
+        private const LogRedaction Redacted = LogRedaction.Personal | LogRedaction.HomeFolder;
 
         private static readonly CategoryTree s_noCategories = CategoryTree.Of(Array.Empty<LogEventSpec>());
         private static readonly ReadOnlyCollection<SaidLine> s_nothingSaid = Array.AsReadOnly(Array.Empty<SaidLine>());
@@ -54,14 +60,25 @@ namespace Tutan.Logging.Editor
         // The window's parts: none until CreateGUI made them, so nothing is drawn into parts not there.
         private Optional<Parts> _parts;
 
+        // The number the chrome gave the window, which it tells the session it shows by: none until it is asked.
+        private Optional<WindowNumber> _number;
+
+        // Whether the window is visible, as Unity says: its session is seen only while it is.
+        private bool _visible;
+
         /// <summary>Opens the log console, or brings it forward.</summary>
         [MenuItem("Window/General/Log Console")]
-        public static void Open()
+        public static void Open() => OpenWindow();
+
+        /// <summary>Opens the log console, or brings the first open one forward, and gives it.</summary>
+        private static LogConsoleWindow OpenWindow()
         {
             var window = GetWindow<LogConsoleWindow>();
-            window.titleContent = new GUIContent("Log Console");
+            window.titleContent = new GUIContent(UnseenText.Name);
             window.minSize = new Vector2(640, 320);
             window.Show();
+            window.DrawTitle();
+            return window;
         }
 
         [Shortcut("Log Console/Open")]
@@ -72,13 +89,49 @@ namespace Tutan.Logging.Editor
         /// <summary>The categories of the session shown: none while none is.</summary>
         private CategoryTree Tree => _bound.HasValue(out Bound bound) ? bound.Tree : s_noCategories;
 
+        /// <summary>The number the chrome gave the window, asked for the first time it is needed, whichever of Unity's calls comes first.</summary>
+        private WindowNumber Numbered()
+        {
+            if (!_number.HasValue(out WindowNumber number))
+            {
+                number = ConsoleChrome.NumberWindow();
+                _number = number;
+            }
+
+            return number;
+        }
+
         private void OnEnable()
         {
             _state = _saved.ToDomain().Or(ConsoleState.Start);
             EditorApplication.update += Tick;
+            ConsoleChrome.Cleared += ChromeCleared;
+            ConsoleChrome.UnseenChanged += DrawTitle;
+            ConsoleSettings.Changed += SettingsChanged;
+            TellShown();
+            DrawTitle();
         }
 
-        private void OnDisable() => EditorApplication.update -= Tick;
+        private void OnDisable()
+        {
+            EditorApplication.update -= Tick;
+            ConsoleChrome.Cleared -= ChromeCleared;
+            ConsoleChrome.UnseenChanged -= DrawTitle;
+            ConsoleSettings.Changed -= SettingsChanged;
+            ConsoleChrome.Show(Numbered(), F.None);
+        }
+
+        private void OnBecameVisible()
+        {
+            _visible = true;
+            TellShown();
+        }
+
+        private void OnBecameInvisible()
+        {
+            _visible = false;
+            TellShown();
+        }
 
         /// <summary>Builds the window, when it opens and after every domain reload.</summary>
         public void CreateGUI()
@@ -94,10 +147,14 @@ namespace Tutan.Logging.Editor
 
             ToolbarButton session = MakeSession();
             ToolbarToggle follow = MakeFollow();
+            ToolbarToggle pause = MakePause();
             ReadOnlyCollection<ToolbarButton> badges = MakeBadges();
             var status = new Label();
             status.AddToClassList("status");
-            root.Add(MakeToolbar(session, follow, badges, status));
+            root.Add(MakeToolbar(session, follow, pause, badges, status));
+
+            Toolbar saved = MakeSaved();
+            root.Add(saved);
 
             TextField query = MakeQuery();
             root.Add(query);
@@ -120,9 +177,10 @@ namespace Tutan.Logging.Editor
             root.Add(panes);
 
             // The parts are new, and nothing is drawn in them yet.
-            var parts = new Parts(root, dark, session, follow, status, query, said, rows, details, categories, badges);
+            var parts = new Parts(root, dark, session, follow, pause, saved, status, query, said, rows, details, categories, badges);
             _parts = parts;
             _sessions = Array.Empty<LogConsoleSession>();
+            DrawToggles(parts);
             Refresh(parts, redraw: true);
         }
 
@@ -135,13 +193,20 @@ namespace Tutan.Logging.Editor
         /// <summary>
         /// Takes in what changed since the last tick, the process's sessions and the records of the
         /// session shown, and draws it, or every part when <paramref name="redraw"/>. It reads the
-        /// session shown once, after the state chose it, and hands that to all it draws.
+        /// session shown once, after the state chose it, and hands that to all it draws. Then, while an
+        /// error is to be brought into sight, it is, once the rows have it. An error to be brought into
+        /// sight in a session the sessions let go is said to be gone first, before they choose another.
         /// </summary>
         private void Refresh(Parts parts, bool redraw)
         {
             DrawSkin(parts);
             IReadOnlyList<LogConsoleSession> sessions = LogConsole.Sessions;
             bool changed = !ReferenceEquals(sessions, _sessions);
+
+            // Of the list read, before it chooses another session, which would end a reveal saying nothing.
+            if (changed)
+                Reveal(parts, _state.RevealAmong(sessions));
+
             ConsoleState next = changed ? _state.SessionsChanged(sessions) : _state;
             Optional<LogConsoleSession> shown = FindShown(next);
             if (changed)
@@ -165,6 +230,9 @@ namespace Tutan.Logging.Editor
 
             if (draw)
                 DrawAll(parts, shown);
+
+            if (_state.Revealing.IsSome)
+                TryReveal(parts);
         }
 
         /// <summary>Makes <paramref name="next"/> the state, does what the change asks of the rows, and draws what it changed.</summary>
@@ -185,13 +253,15 @@ namespace Tutan.Logging.Editor
 
             _state = next;
             _saved = SavedConsole.FromDomain(next);
+            if (next.Session != was.Session)
+                TellShown();
             if (!_parts.HasValue(out Parts parts))
                 return;
 
             if (next.Session != was.Session)
                 Bind(parts, shown);
             else if (_bound.HasValue(out Bound bound))
-                bound.Show(was, next);
+                bound.Show(was, next, ConsoleSettings.Shared.LeftOut);
 
             if (parts.Query.value != next.Query.Text)
                 parts.Query.SetValueWithoutNotify(next.Query.Text);
@@ -202,7 +272,11 @@ namespace Tutan.Logging.Editor
             DrawSaid(parts, shown, marks);
             DrawBadges(parts, marks);
             if (!next.Filter.Equals(was.Filter))
+            {
                 DrawCategories(parts);
+                DrawSaved(parts);
+            }
+
             if (!next.Selection.Equals(was.Selection))
             {
                 ShowSelection(parts, marks, listShowsIt: fromList);
@@ -223,7 +297,7 @@ namespace Tutan.Logging.Editor
             if (same)
                 return;
 
-            _bound = records.Map(_state, static (archive, state) => Bound.Of(archive, state));
+            _bound = records.HasValue(out LogArchive archive) ? F.Some(Bound.Of(archive, _state, ConsoleSettings.Shared.LeftOut)) : F.None;
             parts.Categories.itemsSource = Tree.Nodes;
             DrawAll(parts, shown);
         }
@@ -238,6 +312,7 @@ namespace Tutan.Logging.Editor
             DrawSaid(parts, shown, marks);
             DrawBadges(parts, marks);
             DrawCategories(parts);
+            DrawSaved(parts);
             DrawStatus(parts, marks);
             DrawDetails(parts, marks);
             if (_state.Following)
@@ -247,8 +322,8 @@ namespace Tutan.Logging.Editor
         /// <summary>What the parts are drawn of, as the rows of the session shown say: none while no session is bound.</summary>
         private Optional<RowsMarks> Marks() => _bound.HasValue(out Bound bound) ? F.Some(bound.Marks(_state)) : F.None;
 
-        /// <summary>Draws the parts again for the editor's skin, when it changed since they were drawn: the colours of the categories are the skin's.</summary>
-        private static void DrawSkin(Parts parts)
+        /// <summary>Draws the parts again for the editor's skin, when it changed since they were drawn: the colours of the categories and the saved filters are the skin's.</summary>
+        private void DrawSkin(Parts parts)
         {
             bool dark = EditorGUIUtility.isProSkin;
             if (parts.Dark == dark)
@@ -258,6 +333,7 @@ namespace Tutan.Logging.Editor
             parts.Root.EnableInClassList("dark", dark);
             parts.Rows.RefreshItems();
             parts.Categories.RefreshItems();
+            DrawSaved(parts);
         }
 
         private ToolbarButton MakeSession()
@@ -280,22 +356,26 @@ namespace Tutan.Logging.Editor
             return follow;
         }
 
-        private Toolbar MakeToolbar(ToolbarButton session, ToolbarToggle follow, IEnumerable<ToolbarButton> badges, Label status)
+        private Toolbar MakeToolbar(ToolbarButton session, ToolbarToggle follow, ToolbarToggle pause, IEnumerable<ToolbarButton> badges, Label status)
         {
             var toolbar = new Toolbar();
             toolbar.Add(session);
-            toolbar.Add(new ToolbarButton(Clear)
+            var clear = new ToolbarButton(ConsoleChrome.Clear)
             {
                 text = "Clear",
                 tooltip = "Empties the live sessions, which keep what is logged after, and lets the ended ones go. A file's session stays until it is closed.",
-            });
+            };
+            clear.AddToClassList("clear");
+            toolbar.Add(clear);
+            toolbar.Add(MakeClearMenu());
             toolbar.Add(follow);
+            toolbar.Add(pause);
             toolbar.Add(new ToolbarSpacer { flex = true });
             foreach (ToolbarButton badge in badges)
                 toolbar.Add(badge);
 
             toolbar.Add(status);
-            var more = new ToolbarButton(ShowMoreMenu) { text = "⋮", tooltip = "Open a session's file, or export the rows shown." };
+            var more = new ToolbarButton(ShowMoreMenu) { text = "⋮", tooltip = "Open a session's file, export the rows shown, or save the query as a filter." };
             more.AddToClassList("more");
             toolbar.Add(more);
             return toolbar;
@@ -358,7 +438,7 @@ namespace Tutan.Logging.Editor
             menu.AddSeparator("");
             if (_bound.HasValue(out Bound bound) && bound.View.Count > 0)
             {
-                menu.AddItem(new GUIContent("Export the Rows Shown..."), false, () => Export(LeftOut));
+                menu.AddItem(new GUIContent("Export the Rows Shown..."), false, () => Export(Redacted));
                 menu.AddItem(new GUIContent("Export the Rows Shown, Nothing Left Out..."), false, () => Export(LogRedaction.None));
             }
             else
@@ -367,18 +447,17 @@ namespace Tutan.Logging.Editor
                 menu.AddDisabledItem(new GUIContent("Export the Rows Shown, Nothing Left Out..."));
             }
 
+            menu.AddSeparator("");
+            menu.AddItem(new GUIContent("Save the Query as a Filter..."), false, SaveQueryAsFilter);
+            menu.AddItem(new GUIContent("Log Console Settings..."), false, LogConsoleSettingsProvider.Open);
             menu.ShowAsContext();
         }
 
-        /// <summary>Clears the console, and lets go of what was folded and selected of the session shown when the clear emptied it.</summary>
-        private void Clear()
-        {
-            // Read before the clear, which lets an ended session go.
-            Optional<LogConsoleSession> shown = FindShown(_state);
-            LogConsole.Clear();
-            if (shown.HasValue(out LogConsoleSession cleared))
-                Apply(_state.Cleared(cleared));
-        }
+        /// <summary>
+        /// The editor cleared the console, which held <paramref name="before"/>: what was folded and
+        /// selected of the session shown goes when the clear emptied it.
+        /// </summary>
+        private void ChromeCleared(IReadOnlyList<LogConsoleSession> before) => Apply(_state.Cleared(before));
 
         /// <summary>
         /// The session <paramref name="state"/> shows, as the console has it now, or none once it has let
@@ -441,12 +520,13 @@ namespace Tutan.Logging.Editor
         private void DrawSaid(Parts parts, Optional<LogConsoleSession> shown, Optional<RowsMarks> marks)
         {
             Optional<RowsSaid> rows = marks.HasValue(out RowsMarks of) ? F.Some(of.Said) : F.None;
-            var mark = new SaidMark(_told, _state.Query, shown, rows);
+            LeftOut leftOut = ConsoleSettings.Shared.LeftOut;
+            var mark = new SaidMark(_told, _state.Query, shown, rows, leftOut);
             if (parts.SaidMarked.HasValue(out SaidMark marked) && marked == mark)
                 return;
 
             parts.SaidMarked = mark;
-            ReadOnlyCollection<SaidLine> said = SaidLines.Of(_told, _state.Query, _bound.Map(static shownRows => shownRows.View), shown);
+            ReadOnlyCollection<SaidLine> said = SaidLines.Of(_told, _state.Query, _bound.Map(static shownRows => shownRows.View), shown, leftOut);
             if (said.SequenceEqual(parts.SaidDrawn))
                 return;
 
@@ -470,6 +550,12 @@ namespace Tutan.Logging.Editor
                 retry.AddToClassList("retry");
                 line.Add(retry);
             }
+            else if (said.Kind == SaidKind.LeftOut)
+            {
+                var edit = new Button(LogConsoleSettingsProvider.Open) { text = "Edit", tooltip = "Opens Project Settings > Log Console, where the project says what it always leaves out." };
+                edit.AddToClassList("retry");
+                line.Add(edit);
+            }
 
             return line;
         }
@@ -477,8 +563,8 @@ namespace Tutan.Logging.Editor
         private static string SaidClass(SaidKind kind) => kind switch
         {
             SaidKind.Trouble or SaidKind.Refused => "error",
-            SaidKind.NotDeleted or SaidKind.MatchingNothing or SaidKind.GaveUp or SaidKind.Skipped => "warning",
-            SaidKind.Lost => "info",
+            SaidKind.NotDeleted or SaidKind.MatchingNothing or SaidKind.GaveUp or SaidKind.Skipped or SaidKind.Hidden or SaidKind.Gone => "warning",
+            SaidKind.Lost or SaidKind.LeftOut => "info",
             _ => throw new ArgumentOutOfRangeException(nameof(kind), $"{kind} is not a kind of line the console says."),
         };
 
@@ -517,13 +603,15 @@ namespace Tutan.Logging.Editor
         /// </summary>
         private sealed class Parts
         {
-            public Parts(VisualElement root, bool dark, ToolbarButton session, ToolbarToggle follow, Label status, TextField query, VisualElement said,
-                ListView rows, ScrollView details, ListView categories, ReadOnlyCollection<ToolbarButton> badges)
+            public Parts(VisualElement root, bool dark, ToolbarButton session, ToolbarToggle follow, ToolbarToggle pause, Toolbar saved, Label status,
+                TextField query, VisualElement said, ListView rows, ScrollView details, ListView categories, ReadOnlyCollection<ToolbarButton> badges)
             {
                 Root = root;
                 Dark = dark;
                 Session = session;
                 Follow = follow;
+                Pause = pause;
+                Saved = saved;
                 Status = status;
                 Query = query;
                 Said = said;
@@ -541,6 +629,12 @@ namespace Tutan.Logging.Editor
 
             /// <summary>The toggle that follows the newest row.</summary>
             public ToolbarToggle Follow { get; }
+
+            /// <summary>The toggle of Pause on Error.</summary>
+            public ToolbarToggle Pause { get; }
+
+            /// <summary>The row of the saved filters' buttons, hidden while none is saved.</summary>
+            public Toolbar Saved { get; }
 
             /// <summary>How many rows there are, and whether a scan is reading.</summary>
             public Label Status { get; }
@@ -586,6 +680,12 @@ namespace Tutan.Logging.Editor
 
             /// <summary>What the details were last drawn of: none for no row focused.</summary>
             public Optional<DetailsKey> DetailsDrawn { get; set; }
+
+            /// <summary>What the saved filters' buttons were last made of: none until they are.</summary>
+            public Optional<SavedMark> SavedDrawn { get; set; }
+
+            /// <summary>The filter the saved filters' buttons were last marked on for: none until they are.</summary>
+            public Optional<LogFilter> SavedOnDrawn { get; set; }
         }
     }
 }

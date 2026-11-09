@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
+using Tutan.Functional;
 
 namespace Tutan.Logging
 {
@@ -34,6 +35,10 @@ namespace Tutan.Logging
     /// the file was written with personal fields left out of. An exception is read back as an
     /// <see cref="ArchivedException"/>.
     /// </para>
+    /// <para>
+    /// It knows which of its records are errors, so a console counts the errors it has not shown,
+    /// and pauses for one as it arrives, without reading the records: see <see cref="ErrorsFrom"/>.
+    /// </para>
     /// <para>It is safe to keep records on one thread while another reads them.</para>
     /// </remarks>
     public sealed class LogArchive : LogRecords
@@ -48,6 +53,7 @@ namespace Tutan.Logging
         private readonly List<Block> _blocks = new List<Block>();
         private readonly Dictionary<LogEventSpec, int> _ids = new Dictionary<LogEventSpec, int>();
         private readonly long[] _lateSequences = new long[LateKept];
+        private readonly ErrorIndex _errors = new ErrorIndex();
         private readonly int _blockSize;
 
         // Its events, which a batch it fills names its records by; and the same, read-only, for a reader.
@@ -262,6 +268,24 @@ namespace Tutan.Logging
             }
         }
 
+        /// <summary>
+        /// The errors it holds from <paramref name="sequence"/> on, and where it is now, read at once,
+        /// without allocating. An error is an event's record at <see cref="LogLevel.Error"/> or
+        /// <see cref="LogLevel.Critical"/> that was not written as an error's backlog. An error it let
+        /// go, past its cap or on a clear, is not held, so it is not counted.
+        /// </summary>
+        public LogErrorsHeld ErrorsFrom(long sequence)
+        {
+            lock (_lock)
+            {
+                int at = _errors.IndexFrom(sequence);
+                int end = _errors.End;
+                return at < end
+                    ? new LogErrorsHeld(end - at, _errors[at], _errors[end - 1], NextHeld)
+                    : new LogErrorsHeld(NextHeld);
+            }
+        }
+
         /// <summary>The index its records of <paramref name="spec"/> are stamped with, which it gives a spec the first time it is handed one.</summary>
         /// <exception cref="InvalidOperationException">It is sealed: a file's archive, or an ended session's, which takes no record after.</exception>
         internal int Declare(LogEventSpec spec)
@@ -356,6 +380,7 @@ namespace Tutan.Logging
                 CheckOpen();
                 _floor = NextHeld;
                 _blocks.Clear();
+                _errors.Clear();
                 _count = 0;
                 _dropped = 0;
                 _pendingLost = 0;
@@ -424,6 +449,9 @@ namespace Tutan.Logging
                 return false;
             }
 
+            if (IsError(entry))
+                _errors.Add(sequence);
+
             _count++;
             while (_count > _cap)
                 DropFront();
@@ -488,6 +516,10 @@ namespace Tutan.Logging
             return true;
         }
 
+        /// <summary>Whether <paramref name="entry"/> is an error, as <see cref="ErrorsFrom"/> counts one.</summary>
+        private static bool IsError(in LogEntry entry) =>
+            entry.Kind == LogRecordKind.Event && (entry.Level is LogLevel.Error or LogLevel.Critical) && !entry.Backlog;
+
         private Block AddBlock()
         {
             Block block = NewBlock();
@@ -510,6 +542,7 @@ namespace Tutan.Logging
             _count -= front.Count;
             _dropped += front.Count;
             _floor = front.Last + 1;
+            _errors.DropThrough(front.Last);
 
             // Readers copy what they read under the lock, so none holds the block now. Every block is
             // of one size, and its buffers grow as any block's do.
@@ -541,6 +574,85 @@ namespace Tutan.Logging
         {
             Locate(sequence, out block, out at);
             return block < _blocks.Count && _blocks[block].Entries[at].Sequence == sequence;
+        }
+
+        /// <summary>
+        /// The sequences of the errors it holds, in order and each once, used under its lock: a run of
+        /// an array, which lets go from its start and grows by doubling, so keeping in order allocates
+        /// only when it grows.
+        /// </summary>
+        private sealed class ErrorIndex
+        {
+            private long[] _sequences = new long[16];
+            private int _start;
+
+            /// <summary>One past the last error, where the run ends.</summary>
+            public int End { get; private set; }
+
+            /// <summary>The sequence of the error at <paramref name="index"/>, from the run's start up to <see cref="End"/>.</summary>
+            public long this[int index] => _sequences[index];
+
+            /// <summary>Where the first error at or after <paramref name="sequence"/> is, or <see cref="End"/> when none is.</summary>
+            public int IndexFrom(long sequence)
+            {
+                int low = _start;
+                int high = End;
+                while (low < high)
+                {
+                    int middle = low + (high - low) / 2;
+                    if (_sequences[middle] < sequence)
+                        low = middle + 1;
+                    else
+                        high = middle;
+                }
+
+                return low;
+            }
+
+            /// <summary>Indexes the error of <paramref name="sequence"/>, which it does not hold: at the end when it is the newest, as it most often is.</summary>
+            public void Add(long sequence)
+            {
+                int at = End > _start && sequence < _sequences[End - 1] ? IndexFrom(sequence) : End;
+                if (End == _sequences.Length)
+                    at = MakeRoom(at);
+
+                if (at < End)
+                    Array.Copy(_sequences, at, _sequences, at + 1, End - at);
+
+                _sequences[at] = sequence;
+                End++;
+            }
+
+            /// <summary>Lets go of the errors at or before <paramref name="last"/>, as their block is let go.</summary>
+            public void DropThrough(long last)
+            {
+                _start = IndexFrom(last + 1);
+                if (_start == End)
+                    Clear();
+            }
+
+            /// <summary>Lets go of every error, as a clear lets go of every record.</summary>
+            public void Clear()
+            {
+                _start = 0;
+                End = 0;
+            }
+
+            /// <summary>
+            /// Moves the run to the array's start, into an array twice as long when the run is more than
+            /// half of it, and says where <paramref name="at"/> is after.
+            /// </summary>
+            private int MakeRoom(int at)
+            {
+                int count = End - _start;
+                long[] into = count * 2 > _sequences.Length ? new long[_sequences.Length * 2] : _sequences;
+                Array.Copy(_sequences, _start, into, 0, count);
+                _sequences = into;
+                at -= _start;
+                _start = 0;
+                End = count;
+                return at;
+            }
         }
 
         /// <summary>
@@ -647,6 +759,50 @@ namespace Tutan.Logging
                 return at;
             }
         }
+    }
+
+    /// <summary>
+    /// The errors an archive holds from a sequence on, as <see cref="LogArchive.ErrorsFrom"/> read them:
+    /// none, or how many, from the first to the newest, so the count and its ends always agree.
+    /// </summary>
+    public readonly record struct LogErrorsHeld
+    {
+        private readonly long _first;
+        private readonly long _last;
+
+        /// <summary>None held, the archive at <paramref name="next"/>.</summary>
+        internal LogErrorsHeld(long next)
+        {
+            Count = 0;
+            _first = 0;
+            _last = 0;
+            Next = next;
+        }
+
+        /// <summary><paramref name="count"/> errors held, from <paramref name="first"/> to <paramref name="last"/>, all before <paramref name="next"/>.</summary>
+        internal LogErrorsHeld(long count, long first, long last, long next)
+        {
+            if (count < 1 || first > last || last >= next || last - first + 1 < count)
+                throw new ArgumentOutOfRangeException(nameof(count),
+                    $"No {count.ToString(CultureInfo.InvariantCulture)} errors are held from {first.ToString(CultureInfo.InvariantCulture)} to {last.ToString(CultureInfo.InvariantCulture)} before {next.ToString(CultureInfo.InvariantCulture)}.");
+
+            Count = count;
+            _first = first;
+            _last = last;
+            Next = next;
+        }
+
+        /// <summary>How many errors it holds from the sequence on.</summary>
+        public long Count { get; }
+
+        /// <summary>The sequence of the first of them: none when it holds none.</summary>
+        public Optional<long> First => Count > 0 ? _first : F.None;
+
+        /// <summary>The sequence of the newest of them: none when it holds none.</summary>
+        public Optional<long> Last => Count > 0 ? _last : F.None;
+
+        /// <summary>The archive's <see cref="LogRecords.Next"/> as it was read: every error it held then is before it.</summary>
+        public long Next { get; }
     }
 
     /// <summary>

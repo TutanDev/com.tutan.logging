@@ -10,7 +10,7 @@ namespace Tutan.Logging.Editor
     /// <summary>What a line said under the query line is about.</summary>
     internal enum SaidKind
     {
-        /// <summary>Opening a file or exporting went wrong.</summary>
+        /// <summary>Opening a file, exporting, or changing the settings went wrong.</summary>
         Trouble,
 
         /// <summary>An export was written, but the file it wrote over could not be deleted, and is still beside it.</summary>
@@ -30,12 +30,21 @@ namespace Tutan.Logging.Editor
 
         /// <summary>Records were lost before the console read them.</summary>
         Lost,
+
+        /// <summary>The error the toolbar's badge showed is not among the rows.</summary>
+        Hidden,
+
+        /// <summary>The error the toolbar's badge showed was let go before it could be shown.</summary>
+        Gone,
+
+        /// <summary>What the project always leaves out, which an Edit button opens the settings of.</summary>
+        LeftOut,
     }
 
     /// <summary>A line said under the query line: what it is about, and its text.</summary>
     internal sealed record SaidLine(SaidKind Kind, string Text);
 
-    /// <summary>What the last try at opening a file or exporting told, said under the query line until the next try.</summary>
+    /// <summary>What the last try at opening a file, exporting, changing the settings, or showing an error told, said under the query line until the next try.</summary>
     internal abstract record Told
     {
         private Told()
@@ -61,6 +70,34 @@ namespace Tutan.Logging.Editor
             internal override SaidLine Line => new(SaidKind.NotDeleted,
                 $"The rows were exported to {Export}. The file that was there is now {Left.Path}, and could not be deleted: {Left.Reason} It may hold what this export left out.");
         }
+
+        /// <summary>The error the toolbar's badge showed is not among the rows, once they were read: a warning, as something the developer asked for hides it.</summary>
+        internal sealed record Hidden : Told
+        {
+            private Hidden()
+            {
+            }
+
+            /// <summary>The one line of an error hidden.</summary>
+            public static Hidden Instance { get; } = new Hidden();
+
+            internal override SaidLine Line => new(SaidKind.Hidden,
+                "The error the toolbar showed is not among the rows: the query, a fold, or what the project always leaves out hides it.");
+        }
+
+        /// <summary>The error the toolbar's badge showed was let go before its row was found, past its session's cap or by a clear, or with its session: a warning, as nothing the developer did hides it.</summary>
+        internal sealed record Gone : Told
+        {
+            private Gone()
+            {
+            }
+
+            /// <summary>The one line of an error gone.</summary>
+            public static Gone Instance { get; } = new Gone();
+
+            internal override SaidLine Line => new(SaidKind.Gone,
+                "The error the toolbar showed was let go before it could be shown: past its session's cap, by a clear, or with its session.");
+        }
     }
 
     /// <summary>
@@ -77,31 +114,37 @@ namespace Tutan.Logging.Editor
 
     /// <summary>
     /// What the lines said under the query line are drawn of: what the last try told, the query line,
-    /// the session shown, and what of its rows they say. They are made again only when it changed.
+    /// the session shown, what of its rows they say, and what is always left out. They are made again
+    /// only when it changed.
     /// </summary>
-    /// <param name="Told">What the last try at opening a file or exporting told.</param>
+    /// <param name="Told">What the last try at opening a file, exporting, or showing an error told.</param>
     /// <param name="Query">The query line.</param>
     /// <param name="Session">The session shown, while the process has it.</param>
     /// <param name="Rows">What of the rows they say, while a session is shown.</param>
-    internal readonly record struct SaidMark(Optional<Told> Told, QueryLine Query, Optional<LogConsoleSession> Session, Optional<RowsSaid> Rows);
+    /// <param name="LeftOut">What the project always leaves out.</param>
+    internal readonly record struct SaidMark(Optional<Told> Told, QueryLine Query, Optional<LogConsoleSession> Session, Optional<RowsSaid> Rows, LeftOut LeftOut);
 
     /// <summary>What the console says under its query line.</summary>
     internal static class SaidLines
     {
         /// <summary>
         /// What is said under the query line, in order: what the last try said, why the query does not read,
-        /// and what the rows of <paramref name="view"/> lack, as the query and the session say.
+        /// what the rows of <paramref name="view"/> lack, as the query and the session say, and what the
+        /// project always leaves out of them.
         /// </summary>
-        /// <param name="told">What the last try at opening a file or exporting told, until the next try.</param>
+        /// <param name="told">What the last try at opening a file, exporting, or showing an error told, until the next try.</param>
         /// <param name="query">The query line.</param>
         /// <param name="view">The rows, while a session is shown.</param>
         /// <param name="session">The session shown, while the process has it.</param>
-        public static ReadOnlyCollection<SaidLine> Of(Optional<Told> told, QueryLine query, Optional<LogView> view, Optional<LogConsoleSession> session)
+        /// <param name="leftOut">What the project always leaves out, which the line does not show.</param>
+        public static ReadOnlyCollection<SaidLine> Of(Optional<Told> told, QueryLine query, Optional<LogView> view, Optional<LogConsoleSession> session, LeftOut leftOut)
         {
             if (query is null)
                 throw new ArgumentNullException(nameof(query));
+            if (leftOut is null)
+                throw new ArgumentNullException(nameof(leftOut));
 
-            return Array.AsReadOnly(Said(told, query, view, session).ToArray());
+            return Array.AsReadOnly(Said(told, query, view, session, leftOut).ToArray());
         }
 
         /// <summary>
@@ -116,7 +159,7 @@ namespace Tutan.Logging.Editor
             return trimmed.Length == 0 || trimmed[trimmed.Length - 1] is '.' or '?' or '!' ? trimmed : trimmed + ".";
         }
 
-        private static IEnumerable<SaidLine> Said(Optional<Told> told, QueryLine query, Optional<LogView> view, Optional<LogConsoleSession> session)
+        private static IEnumerable<SaidLine> Said(Optional<Told> told, QueryLine query, Optional<LogView> view, Optional<LogConsoleSession> session, LeftOut leftOut)
         {
             if (told.HasValue(out Told last))
                 yield return last.Line;
@@ -144,6 +187,9 @@ namespace Tutan.Logging.Editor
 
             if (rows.Lost > 0)
                 yield return new SaidLine(SaidKind.Lost, $"{RowCells.Lost(rows.Lost)}, before the console read them.");
+
+            if (leftOut.Terms.Count > 0)
+                yield return new SaidLine(SaidKind.LeftOut, $"The project always leaves out {leftOut.Query}.");
         }
 
         private static string Words(IReadOnlyList<LogFilterTerm> terms) => string.Join(", ", terms.Select(static term => term.ToString()));

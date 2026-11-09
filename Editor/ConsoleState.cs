@@ -14,7 +14,8 @@ namespace Tutan.Logging.Editor
     /// </summary>
     /// <remarks>
     /// The rows are not part of it: they are a <see cref="LogView"/> of the session, which the window
-    /// keeps up to date and sets the filter and folds of from the state.
+    /// keeps up to date and sets the filter and folds of from the state, leaving out after it what the
+    /// project always leaves out.
     /// </remarks>
     internal sealed record ConsoleState
     {
@@ -40,6 +41,16 @@ namespace Tutan.Logging.Editor
 
         /// <summary>Whether the newest row stays in sight, and a live session that starts is chosen.</summary>
         public bool Following { get; private init; }
+
+        /// <summary>
+        /// The line as it was before a saved filter was pressed, while the line is a saved filter's: pressing
+        /// that filter again brings it back. None once the line is changed otherwise, and after a domain
+        /// reload, which does not keep it.
+        /// </summary>
+        public Optional<QueryLine> BeforeSaved { get; private init; }
+
+        /// <summary>The sequence of the record of the session shown to bring into sight once its rows have it: none while none is.</summary>
+        public Optional<long> Revealing => Shown.Bind(static shown => shown.Revealing);
 
         /// <summary>The id of the session shown; none while the process has none.</summary>
         public Optional<LogSessionId> Session => Shown.Map(static shown => shown.Id);
@@ -73,7 +84,89 @@ namespace Tutan.Logging.Editor
         }
 
         /// <summary>The query line as typed: a filter when it reads, and the filter it had and why it does not when it does not.</summary>
-        public ConsoleState Type(string text) => this with { Query = QueryLine.Of(text, Filter) };
+        public ConsoleState Type(string text) => this with { Query = QueryLine.Of(text, Filter), BeforeSaved = F.None };
+
+        /// <summary>
+        /// A saved filter's button pressed: while it is on, the line goes back to what it was before a
+        /// saved filter was pressed, or to the empty line; else the line is the saved filter's, and the
+        /// line before is remembered, the first line when another saved filter was on.
+        /// </summary>
+        public ConsoleState PressSaved(SavedFilter saved)
+        {
+            if (saved is null)
+                throw new ArgumentNullException(nameof(saved));
+
+            if (saved.IsOn(Filter))
+                return this with { Query = BeforeSaved.Or(QueryLine.Empty), BeforeSaved = F.None };
+
+            Optional<QueryLine> before = BeforeSaved.IsSome ? BeforeSaved : Query;
+            return this with { Query = QueryLine.Written(saved.Filter), BeforeSaved = before };
+        }
+
+        /// <summary>
+        /// An error to show, as the toolbar's badge asks: its session is chosen, following stops so the
+        /// newest row does not take the rows away from it, and its record is brought into sight once the
+        /// rows have it, as <see cref="RevealIn"/> says.
+        /// </summary>
+        public ConsoleState Reveal(UnseenError error)
+        {
+            if (error.Session == default)
+                throw new ArgumentException("The default id is no session, and an error to show is of one.", nameof(error));
+
+            SessionShown shown = Shown.HasValue(out SessionShown current) && current.Id == error.Session ? current : SessionShown.Of(error.Session);
+            return this with { Shown = shown.Reveal(error.Record), Following = false };
+        }
+
+        /// <summary>
+        /// What bringing the record <see cref="Revealing"/> into sight asks of <paramref name="rows"/>, the
+        /// view of the session shown, as it is now: to wait while there is no such record or the view
+        /// still scans; to say it is gone, when there are no rows, as the process let the session go, or
+        /// the record is older than every record they are of, let go past the cap or by a clear; to select
+        /// the row that holds it, for the window to scroll to; or, when the scan caught up and no row holds
+        /// it, as a query, a fold or what is always left out hides it, to say so.
+        /// </summary>
+        public RevealStep RevealIn(Optional<LogView> rows)
+        {
+            if (!Shown.HasValue(out SessionShown shown) || !shown.Revealing.HasValue(out long record))
+                return RevealStep.Waiting.Instance;
+
+            if (!rows.HasValue(out LogView view) || record < view.Source.First)
+                return new RevealStep.Gone(this with { Shown = shown.Revealed(shown.Selection) });
+
+            if (view.IsScanning)
+                return RevealStep.Waiting.Instance;
+
+            if (!view.Find(record).HasValue(out int index))
+                return new RevealStep.Hidden(this with { Shown = shown.Revealed(shown.Selection) });
+
+            // The row's own sequence, as a repeat's row holds the records of its run.
+            long row = view[index].Sequence;
+            return new RevealStep.Found(index, this with { Shown = shown.Revealed(Selection.Of(new[] { row }, row)) });
+        }
+
+        /// <summary>
+        /// What bringing the record <see cref="Revealing"/> into sight comes to among <paramref name="sessions"/>,
+        /// the process's sessions as they are now: to say it is gone, as <see cref="RevealIn"/> does with no
+        /// rows, when the session shown is not among them; else to wait, for <see cref="RevealIn"/> to read
+        /// the rows. Asked before <see cref="SessionsChanged"/>, which chooses another session and so would
+        /// end it saying nothing.
+        /// </summary>
+        public RevealStep RevealAmong(IReadOnlyList<LogConsoleSession> sessions)
+        {
+            if (sessions is null)
+                throw new ArgumentNullException(nameof(sessions));
+
+            if (!Shown.HasValue(out SessionShown shown) || shown.Revealing.IsNone)
+                return RevealStep.Waiting.Instance;
+
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                if (sessions[i].Id == shown.Id)
+                    return RevealStep.Waiting.Instance;
+            }
+
+            return RevealIn(F.None);
+        }
 
         /// <summary>A level's badge pressed: only that level is shown, or every level when only it was.</summary>
         public ConsoleState PressBadge(LogLevel level)
@@ -156,8 +249,14 @@ namespace Tutan.Logging.Editor
             return Shown.HasValue(out SessionShown shown) ? this with { Shown = shown.ToggleFold(scope) } : this;
         }
 
-        /// <summary>Follow pressed on: the newest row is in sight, and a live session that starts is chosen.</summary>
-        public ConsoleState Follow() => Following ? this : this with { Following = true };
+        /// <summary>Follow pressed on: the newest row is in sight, and a live session that starts is chosen; a record being brought into sight is no more.</summary>
+        public ConsoleState Follow()
+        {
+            ConsoleState revealed = Shown.HasValue(out SessionShown shown) && shown.Revealing.IsSome
+                ? this with { Shown = shown.Revealed(shown.Selection) }
+                : this;
+            return revealed.Following ? revealed : revealed with { Following = true };
+        }
 
         /// <summary>Follow pressed off: the rows stay where they are, and so does the session.</summary>
         public ConsoleState StopFollowing() => Following ? this with { Following = false } : this;
@@ -183,10 +282,31 @@ namespace Tutan.Logging.Editor
             return emptied ? this with { Shown = shown.Cleared() } : this;
         }
 
+        /// <summary>
+        /// The console cleared, as <see cref="Cleared(LogConsoleSession)"/> says, given <paramref name="before"/>,
+        /// the sessions as they were before the clear: this one when the session shown was not among them.
+        /// </summary>
+        public ConsoleState Cleared(IReadOnlyList<LogConsoleSession> before)
+        {
+            if (before is null)
+                throw new ArgumentNullException(nameof(before));
+
+            if (!Session.HasValue(out LogSessionId shown))
+                return this;
+
+            for (int i = 0; i < before.Count; i++)
+            {
+                if (before[i].Id == shown)
+                    return Cleared(before[i]);
+            }
+
+            return this;
+        }
+
         /// <summary>Whether <paramref name="id"/> is newer than every session it has seen.</summary>
         private bool Unseen(LogSessionId id) => !NewestSeen.HasValue(out LogSessionId seen) || id > seen;
 
-        private ConsoleState Written(LogFilter filter) => this with { Query = QueryLine.Written(filter) };
+        private ConsoleState Written(LogFilter filter) => this with { Query = QueryLine.Written(filter), BeforeSaved = F.None };
 
         private static Optional<LogSessionId> Newest(IEnumerable<LogConsoleSession> sessions) =>
             sessions.Aggregate(default(Optional<LogSessionId>), static (newest, session) =>
@@ -194,8 +314,9 @@ namespace Tutan.Logging.Editor
     }
 
     /// <summary>
-    /// The session the console shows, and what of it the developer folded and selected: these are of
-    /// its rows, so choosing another session starts them afresh, and a state with no session has none.
+    /// The session the console shows, what of it the developer folded and selected, and the record to
+    /// bring into sight, if one is: these are of its rows, so choosing another session starts them
+    /// afresh, and a state with no session has none.
     /// </summary>
     internal sealed record SessionShown
     {
@@ -215,6 +336,9 @@ namespace Tutan.Logging.Editor
         /// <summary>The rows selected.</summary>
         public Selection Selection { get; private init; }
 
+        /// <summary>The sequence of the record to bring into sight once the rows have it: none while none is.</summary>
+        public Optional<long> Revealing { get; private init; }
+
         /// <summary><paramref name="id"/> shown afresh: nothing folded, nothing selected.</summary>
         /// <exception cref="ArgumentException"><paramref name="id"/> is the default, which is no session.</exception>
         public static SessionShown Of(LogSessionId id)
@@ -229,11 +353,73 @@ namespace Tutan.Logging.Editor
         public SessionShown ToggleFold(long scope) =>
             this with { Folded = Folded.Contains(scope) ? Folded.Without(scope) : Folded.With(scope) };
 
-        /// <summary><paramref name="selection"/> selected in place of what was.</summary>
-        public SessionShown Select(Selection selection) =>
-            this with { Selection = selection ?? throw new ArgumentNullException(nameof(selection)) };
+        /// <summary><paramref name="selection"/> selected in place of what was, which ends bringing a record into sight: the developer chose what to see.</summary>
+        public SessionShown Select(Selection selection) => Revealed(selection);
 
-        /// <summary>The session's records cleared: nothing folded, nothing selected.</summary>
-        public SessionShown Cleared() => this with { Folded = ScopeSet.Empty, Selection = Selection.None };
+        /// <summary><paramref name="record"/> to bring into sight once the rows have it, in place of one that was.</summary>
+        public SessionShown Reveal(long record)
+        {
+            if (record < 1)
+                throw new ArgumentOutOfRangeException(nameof(record), $"A record's sequence counts from 1, and {record.ToString(CultureInfo.InvariantCulture)} was given.");
+
+            return this with { Revealing = record };
+        }
+
+        /// <summary>A record brought into sight, or not to be: <paramref name="selection"/> selected, and none is being brought into sight.</summary>
+        public SessionShown Revealed(Selection selection) =>
+            this with { Selection = selection ?? throw new ArgumentNullException(nameof(selection)), Revealing = F.None };
+
+        /// <summary>The session's records cleared: nothing folded, nothing selected, and nothing to bring into sight.</summary>
+        public SessionShown Cleared() => this with { Folded = ScopeSet.Empty, Selection = Selection.None, Revealing = F.None };
+    }
+
+    /// <summary>What bringing a record into sight asks of the rows now, as <see cref="ConsoleState.RevealIn"/> says.</summary>
+    internal abstract record RevealStep
+    {
+        private RevealStep()
+        {
+        }
+
+        /// <summary>Does what <paramref name="waiting"/>, <paramref name="found"/>, <paramref name="hidden"/> or <paramref name="gone"/> does with the case it is.</summary>
+        public abstract R Match<R>(Func<Waiting, R> waiting, Func<Found, R> found, Func<Hidden, R> hidden, Func<Gone, R> gone);
+
+        /// <summary>Nothing yet: no record is being brought into sight, or the rows are still being scanned.</summary>
+        public sealed record Waiting : RevealStep
+        {
+            private Waiting()
+            {
+            }
+
+            /// <summary>The one waiting step.</summary>
+            public static Waiting Instance { get; } = new Waiting();
+
+            /// <inheritdoc />
+            public override R Match<R>(Func<Waiting, R> waiting, Func<Found, R> found, Func<Hidden, R> hidden, Func<Gone, R> gone) => waiting(this);
+        }
+
+        /// <summary>The row at <see cref="Index"/> holds the record: <see cref="Next"/> selects it, for the window to scroll to.</summary>
+        /// <param name="Index">The row's index.</param>
+        /// <param name="Next">The state with the row selected, bringing no record into sight.</param>
+        public sealed record Found(int Index, ConsoleState Next) : RevealStep
+        {
+            /// <inheritdoc />
+            public override R Match<R>(Func<Waiting, R> waiting, Func<Found, R> found, Func<Hidden, R> hidden, Func<Gone, R> gone) => found(this);
+        }
+
+        /// <summary>The scan caught up, and no row holds the record: <see cref="Next"/> brings it into sight no more, for the window to say why.</summary>
+        /// <param name="Next">The state bringing no record into sight.</param>
+        public sealed record Hidden(ConsoleState Next) : RevealStep
+        {
+            /// <inheritdoc />
+            public override R Match<R>(Func<Waiting, R> waiting, Func<Found, R> found, Func<Hidden, R> hidden, Func<Gone, R> gone) => hidden(this);
+        }
+
+        /// <summary>The record was let go before its row was found, or its session was: <see cref="Next"/> brings it into sight no more, for the window to say so.</summary>
+        /// <param name="Next">The state bringing no record into sight.</param>
+        public sealed record Gone(ConsoleState Next) : RevealStep
+        {
+            /// <inheritdoc />
+            public override R Match<R>(Func<Waiting, R> waiting, Func<Found, R> found, Func<Hidden, R> hidden, Func<Gone, R> gone) => gone(this);
+        }
     }
 }
