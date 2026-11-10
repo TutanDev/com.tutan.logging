@@ -177,6 +177,7 @@ A `LogConsoleSession` is `Live`, `Ended` (with `At`, when it ended) or `File` (w
 Every one has an `Id` and its `Records`, a `LogArchive` that a `LogView` reads as it reads a store (see [Reading Records](reading.md)).
 A session's state never changes in place: when a live session ends, `Sessions` is a new list with an `Ended` under the same id where it was.
 A domain reload lets every session go.
+[The Log Console](log-console.md) is the editor window that reads them.
 
 ## Memory, for tests
 

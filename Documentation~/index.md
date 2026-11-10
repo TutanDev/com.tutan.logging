@@ -27,6 +27,7 @@ Formatting waits for a reader: the Unity Console once a frame, a JSON lines file
 | **Frames** | Every record carries `Time.frameCount` |
 | **Sinks** | The Unity Console, the log console's sessions, a JSON lines file per session, and memory for tests |
 | **Views** | The records a filter query keeps, as rows that count repeats and nest under scopes, from a live store or a session's file |
+| **The log console** | An editor window that reads a session's records whole: a query line, level badges, a category tree, columns, and each record's fields, scopes and source |
 | **Unity's log** | A bridge brings every `Debug.Log` and exception into the store |
 | **No static logger** | A `Log` is handed in, like any other dependency |
 
@@ -41,6 +42,7 @@ Formatting waits for a reader: the Unity Console once a frame, a JSON lines file
 | [Store and Rules](store-and-rules.md) | The rings, levels, rules and rate limits, what the log says about itself |
 | [Sinks](sinks.md) | The drain, backlog, redaction, the Console, log console, JSON lines and memory sinks, writing a sink |
 | [Reading Records](reading.md) | The view, filter queries, scopes, and reading a session's file back |
+| [The Log Console](log-console.md) | The editor window: sessions, the query line, badges and categories, columns, details, exporting, unseen errors, settings |
 | [Unity Integration](unity-integration.md) | The PlayerLoop pump, the `Debug.Log` bridge, Console links, Play Mode, caller paths in builds |
 | [Generator Diagnostics](diagnostics.md) | TLOG0001 to TLOG0010 |
 | [API Reference](api-reference.md) | Every public type and member |
@@ -54,7 +56,7 @@ code ── log.Saved(3, file) ──▶ LogStore (fixed rings) ◀── LogPum
                                      │
                                      ▼  LogPump pumps the drain (end of PostLateUpdate)
                                  LogDrain ──▶ UnityConsoleSink   (rows with links)
-                                     │──────▶ LogConsoleSink     (the log console's sessions)
+                                     │──────▶ LogConsoleSink     (the log console's sessions ──▶ Window > General > Log Console)
                                      │──────▶ JsonLinesSink      (a file per session)
                                      └──────▶ MemorySink         (tests)
 
@@ -73,6 +75,8 @@ The code it composes receives a `Log`.
 
 ## Version 2
 
-The reading model is in: a `LogView` of what a `LogFilter` keeps, over a live store or a `LogArchive` read back from a session's file.
-So are the console's sessions: a `LogConsoleSink` keeps every record of a session, whole, in `LogConsole.Sessions`, and a session that ended stays until the console is cleared.
-The Editor window that draws them, beside Unity's Console, is planned and not in this version.
+Version 2 reads records as well as writing them.
+A `LogView` shows what a `LogFilter` keeps, over a live store or a `LogArchive` read back from a session's file.
+A `LogConsoleSink` keeps every record of a session, whole, in `LogConsole.Sessions`, and a session that ended stays until the console is cleared.
+The [log console](log-console.md), an editor window beside Unity's Console, draws them.
+A runtime overlay, actions on a field's value and reading a player's log remotely are not in this version.

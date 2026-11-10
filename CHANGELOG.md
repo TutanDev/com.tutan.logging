@@ -78,4 +78,28 @@ First version: a structured log for Unity, ported from the design of FunctionalR
 - **`LogPump`:** installs a frame stamp at the start of `EarlyUpdate` and the drain pump at the end of `PostLateUpdate`, and removes itself when Play Mode ends.
 - **`UnityLogBridge`:** brings `Application.logMessageReceivedThreaded` into a store as `unity/Logged`, at the level its `LogType` maps to, skipping what the Console sink writes.
 - **The package's own events**, in category `log`: `DrainFellBehind`, `SinkFailed`, `KeyTaken`, `CategoryTaken` and `RuleMatchesNothing`.
-- **Tests:** an Edit Mode suite in `Tests/Editor` covering the store, rules, scopes, every field kind, the catalog, the drain, both sinks, the file, redaction, path mapping, the bridge, the pump, allocation-free writing, the archive, reading a file back, scopes, filters and the view, the console's sessions, plus xunit tests of the generator in `Generators~`.
+- **`LogArchive.ErrorsFrom`:** the errors an archive holds from a sequence on, as a `LogErrorsHeld` with how many, the first, the last and where the archive is now, read at once without allocating.
+  An error is a record at `Error` or `Critical` that was not written as an error's backlog, and one the archive let go is not counted.
+- **`LogFile.Export`:** writes every record a view's rows stand for as JSON lines that `LogFile.Read` reads back, beside the path and moved onto it once whole, so a failed export leaves the file that was there as it was.
+  It fails with a `LogExportError` code (`NotWritten`, `NotPutBack`, `LeftBeside`), and `LogExported.NotDeleted` names a file it wrote over and could not delete, which may hold what the export left out.
+  `LogFile.ExportName` names an export so that `Session` never deletes it, and `LogFile.Folder` is where `Session` keeps a program's files.
+- **Reading, for the console:** `LogView.Write` of rows that need not be one run, `LogView.EventCount` (how many records of an event the filter keeps but for its event terms), `LogFilter.KeepsEvent`, and `LogValue.ToText` and `LogSinkOptions.Text`, a value as a sink writes it with its redaction.
+  `LogSessionId` compares, a newer session's above an older's.
+- **The log console** (`Tutan.Logging.Editor`, an editor-only assembly): a window at **Window > General > Log Console**, beside Unity's Console, that reads the sessions of `LogConsole.Sessions` whole and typed.
+  Its rows are those a query keeps, as `LogFilter` reads it, with a badge for each level that counts the records the query keeps but for its levels, and a tree of the categories, each with its count; a badge or a category pressed writes the query line.
+  Selecting a row shows its record: its fields, personal ones marked, the scopes it is under, where it was written with the source around that line, where its event was declared, and its stack.
+  A row's call site opens in the IDE on a double-click or Enter, and a message Unity's log handed over opens at the first frame of its stack in the project.
+  Rows are copied as text or JSON lines, and the rows shown exported to a file, with personal fields and the home folder left out unless asked otherwise.
+  A scope's row folds, and a scope shown alone keeps only its records.
+  A session's file opens as a session of its own, and **Follow** keeps the newest row in sight and shows a live session as it starts.
+  The query line and **Follow** survive a domain reload and an editor restart, and a shortcut to open the window can be bound in Edit > Shortcuts.
+- **The console's columns:** time, frame, level, category, event, message, duration, call site and thread, the event and the thread hidden at first.
+  The header's menu shows and hides a column and a drag resizes one, and every console window shows the one layout.
+  The message is always shown, fills the room the others leave, and holds the row's marks: records lost before it, its indent under its scopes, its fold, how many it repeats, and how many a rate limit dropped.
+- **The console's chrome:** **Clear on Play**, on at first, clears the console as Play Mode is entered, and **Pause on Error** pauses the game when an error arrives while it plays.
+  The errors no console window has shown are counted, on a badge on the editor's main toolbar from Unity 6.3 or in the window's title below it, and pressing the badge shows the console at the first, or says the query hides it or it was let go.
+- **The console's settings:** saved filters (buttons over the query line, each pressed to show its query and again to show what was shown before), a colour per category, and a query every view always leaves out, which the team shares in `ProjectSettings/TutanLogConsole.json` and edits on a **Project Settings > Log Console** page and from the window.
+  Each developer keeps Clear on Play, Pause on Error and the columns in `UserSettings/TutanLogConsole.json`.
+  Both are versioned JSON, read again when they change on disk, and a change is made to the file as read again, so a teammate's edit pulled in mid-session is kept.
+  An entry that does not read is skipped, and the settings page says which and why; a file that cannot be read is never written over.
+- **Tests:** an Edit Mode suite in `Tests/Editor` covering the store, rules, scopes, every field kind, the catalog, the drain, both sinks, the file, redaction, path mapping, the bridge, the pump, allocation-free writing, the archive, reading a file back, scopes, filters and the view, the console's sessions, the console window's state, category tree, details, chrome, settings and columns, and that its tick allocates nothing, plus xunit tests of the generator in `Generators~`.

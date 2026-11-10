@@ -2,6 +2,7 @@
 
 Every public type of `Tutan.Logging`, in namespace `Tutan.Logging`.
 Members marked *generator* are what generated code calls; they are hidden from IntelliSense and not meant to be called by hand.
+The log console, in the editor-only assembly `Tutan.Logging.Editor`, has no public API: [The Log Console](log-console.md) says how to use it.
 
 ## Declaring
 
