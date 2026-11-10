@@ -155,9 +155,6 @@ namespace Tutan.Logging.Editor
     /// <summary>What the details show of the record of the row selected.</summary>
     internal sealed record RecordDetails
     {
-        // By key, not by spec: a session read from a file has specs of its own.
-        private static readonly string s_loggedKey = UnityLog.Events.Logged.Key;
-
         private RecordDetails(long sequence, bool ofFirst, string key, LogLevel level, LogRecordKind kind, DateTimeOffset at, long frame, int thread,
             int records, long suppressed, bool context, string message, ReadOnlyCollection<FieldShown> fields, ReadOnlyCollection<ScopeShown> scopes,
             Optional<SourcePlace> callSite, Optional<SourcePlace> declaration, ReadOnlyCollection<StackFrame> stack)
@@ -288,13 +285,8 @@ namespace Tutan.Logging.Editor
                 if (CallSite.IsSome)
                     return CallSite;
 
-                foreach (StackFrame frame in Stack)
-                {
-                    if (frame.At.HasValue(out SourcePlace at) && at.InProject)
-                        return at;
-                }
-
-                return Declaration;
+                Optional<SourcePlace> first = StackFrames.FirstInProject(Stack);
+                return first.IsSome ? first : Declaration;
             }
         }
 
@@ -333,14 +325,14 @@ namespace Tutan.Logging.Editor
             RowCells.CheckRecord(record, row);
 
             LogEventSpec spec = record.Event;
-            bool logged = spec.Key == s_loggedKey;
+            bool logged = StackFrames.HoldsUnityStack(spec);
             var fields = new List<FieldShown>(record.FieldCount);
             ReadOnlyCollection<StackFrame> stack = Array.AsReadOnly(Array.Empty<StackFrame>());
             for (int i = 0; i < record.FieldCount; i++)
             {
                 LogValue value = record.Field(i);
                 LogField field = value.Field;
-                if (logged && field.Name == UnityLog.StackTraceField && value.Kind == LogValueKind.String)
+                if (logged && StackFrames.IsUnityStack(value))
                 {
                     if (!value.IsNone)
                         stack = StackFrames.OfUnity(value.ToString(), paths);

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using NUnit.Framework;
 using Tutan.Functional;
 using Tutan.Logging.Editor;
@@ -11,7 +12,7 @@ namespace Tutan.Logging.Tests
     /// What the profile promises of the console window's tick: one with nothing new allocates nothing,
     /// and one with records allocates only for what they changed. Each test binds a console session's
     /// records as the window does, and asks of them all a tick of the window asks: the update, what
-    /// each row and each category is bound of, and <see cref="LogConsoleWindow.Bound.Marks"/>, the one
+    /// each cell of each row and each category is bound of, and <see cref="LogConsoleWindow.Bound.Marks"/>, the one
     /// value every other part is drawn of. What UI Toolkit allocates to draw is Unity's, and is not
     /// measured, nor is what the session allocates to keep records, which the allocation tests measure.
     /// </summary>
@@ -190,6 +191,9 @@ namespace Tutan.Logging.Tests
                 .Choosing(Category("tests"), new ChosenColour(255, 0, 0))
                 .Choosing(Category("game.net"), new ChosenColour(0, 0, 255));
 
+            /// <summary>A project the records' call sites are not in, so a row's call site is its file's whole path.</summary>
+            private static readonly UnityPaths s_paths = new UnityPaths("D:/Game", new (string, string)[0]);
+
             private RowCells?[] _cells = new RowCells?[8];
             private long[] _counts = new long[8];
             private Optional<LogConsoleWindow.RowsMarks> _marks;
@@ -197,7 +201,7 @@ namespace Tutan.Logging.Tests
             public Window(LogRecords records)
             {
                 State = ConsoleState.Start.StopFollowing().Choose(new LogSessionId(1));
-                Bound = LogConsoleWindow.Bound.Of(records, State, LeftOut.None);
+                Bound = LogConsoleWindow.Bound.Of(records, State, LeftOut.None, s_paths);
             }
 
             public ConsoleState State { get; private set; }
@@ -227,17 +231,26 @@ namespace Tutan.Logging.Tests
                 LogView view = Bound.View;
                 bool drew = false;
                 Grow(ref _cells, view.Count);
+                ReadOnlyCollection<ConsoleColumn> columns = ConsoleColumns.All;
                 for (int i = 0; i < view.Count; i++)
                 {
-                    RowCells cells = Bound.Cells(i);
-                    drew |= !ReferenceEquals(cells, _cells[i]);
-                    _cells[i] = cells;
+                    // Each cell is bound by itself, and asks for its row's cells, which are read once.
+                    RowCells? bound = null;
+                    for (int c = 0; c < columns.Count; c++)
+                    {
+                        ConsoleColumn column = columns[c];
+                        RowCells cells = Bound.Cells(i);
+                        bound = cells;
+                        _ = cells.Text(column);
+                        _ = cells.Tip(column);
+                        for (int level = 0; level < LevelLook.Shown.Count; level++)
+                            _ = LevelLook.Class(LevelLook.Shown[level]);
+                        if (column == ConsoleColumn.Category)
+                            _ = Look.Category(cells.Category, s_colours, dark: true);
+                    }
 
-                    // What else a row's binding asks of it.
-                    _ = TextLinesSink.Short(cells.Row.Level);
-                    for (int level = 0; level < LevelLook.Shown.Count; level++)
-                        _ = LevelLook.Class(LevelLook.Shown[level]);
-                    _ = Look.Category(cells.Category, s_colours, dark: true);
+                    drew |= !ReferenceEquals(bound, _cells[i]);
+                    _cells[i] = bound;
                 }
 
                 LogConsoleWindow.RowsMarks marks = Bound.Marks(State);

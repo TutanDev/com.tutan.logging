@@ -238,6 +238,32 @@ namespace Tutan.Logging.Tests
             Assert.That(framed.CallSite.IsNone, Is.True);
             Assert.That(framed.Opens.Map(at => at.ToString()).Or(""), Is.EqualTo("Assets/Game/Boot.cs:9"), "Not the frame outside the project.");
             Assert.That((bare.Opens, bare.Opens.IsSome), Is.EqualTo((bare.Declaration, true)));
+
+            RowCells framedCells = Cells(view, 0, folded: false);
+            RowCells bareCells = Cells(view, 1, folded: false);
+            Assert.That((framedCells.CallSite, framedCells.CallSiteTip), Is.EqualTo(("Boot.cs:9", "Assets/Game/Boot.cs:9")), "A row's call site is what opening it opens.");
+            Assert.That((bareCells.CallSite, bareCells.CallSiteTip), Is.EqualTo(("", "")), "Where its event was declared is not where it was written.");
+            Assert.That(StackFrames.FirstInProject(framed.Stack).Map(at => at.ToString()).Or(""), Is.EqualTo("Assets/Game/Boot.cs:9"));
+            Assert.That(StackFrames.FirstInProject(Array.Empty<StackFrame>()).IsNone, Is.True);
+        }
+
+        [Test]
+        public void A_cell_of_each_column_says_its_text_and_the_event_and_the_call_site_say_more_as_their_tip()
+        {
+            LogStore store = Stores.Everything();
+            store.EnterFrame(3);
+            store.Log.Saved(1, "A.sav");
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+            RowCells cells = Cells(view, 0, folded: false);
+
+            Assert.That(ConsoleColumns.All.Select(cells.Text), Is.EqualTo(new[]
+            {
+                cells.Time, "3", TextLinesSink.Short(LogLevel.Information), "tests.save", "Saved", "Saved slot 1 as A.sav", "", cells.CallSite, cells.Thread,
+            }));
+            Assert.That(ConsoleColumns.All.Select(cells.Tip), Is.EqualTo(new[] { "", "", "", "", "tests.save/Saved", "", "", cells.CallSiteTip, "" }));
+            Assert.Throws<ArgumentOutOfRangeException>(() => cells.Text((ConsoleColumn)0), "No value of the enum but a column is taken for one.");
+            Assert.Throws<ArgumentOutOfRangeException>(() => cells.Tip((ConsoleColumn)99));
         }
 
         [Test]
@@ -408,8 +434,9 @@ namespace Tutan.Logging.Tests
 
             Assert.Throws<ArgumentException>(() => RowCells.Gone(row, shows), "An event's row has no time and no fold.");
             Assert.Throws<ArgumentException>(() => RowCells.Gone(scope, F.None), "A scope's row shows both.");
-            Assert.Throws<ArgumentException>(() => RowCells.Of(batch[0], row, view.Source.Clock, shows));
-            Assert.Throws<ArgumentException>(() => RowCells.Of(batch[0], scope, view.Source.Clock, F.None));
+            Assert.Throws<ArgumentException>(() => RowCells.Of(batch[0], row, view.Source.Clock, shows, s_paths));
+            Assert.Throws<ArgumentException>(() => RowCells.Of(batch[0], scope, view.Source.Clock, F.None, s_paths));
+            Assert.Throws<ArgumentNullException>(() => RowCells.Of(batch[0], row, view.Source.Clock, F.None, null!));
             Assert.Throws<ArgumentNullException>(() => new RowScope(null!, folded: false));
         }
 
@@ -462,6 +489,10 @@ namespace Tutan.Logging.Tests
             Assert.That((saved.Held, saved.Context, saved.Duration, saved.Folded), Is.EqualTo((true, false, "", false)));
             Assert.That((scope.Frame, scope.Message, scope.Duration, scope.Folded), Is.EqualTo(("", "Saving slot 2", "12.4 ms", true)), "No frame, as the store had none.");
             Assert.That(said.Message, Is.EqualTo("first …"), "A row shows a message's first line.");
+            Assert.That((saved.Event, saved.EventTip, saved.Thread), Is.EqualTo(("Saved", "tests.save/Saved", Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture))));
+            Assert.That(saved.CallSite, Does.StartWith(nameof(RecordDetailsTests) + ".cs:"), "The file's name and the line, as the row has room for.");
+            Assert.That((saved.CallSite, saved.CallSiteTip), Is.EqualTo((Details(view, 0).Opens.ValueUnsafe().Short, Details(view, 0).Opens.ValueUnsafe().ToString())),
+                "A row's call site is what opening it opens.");
         }
 
         [Test]
@@ -473,6 +504,7 @@ namespace Tutan.Logging.Tests
 
             Assert.That((gone.Repeats, gone.Suppressed, gone.LostBefore), Is.EqualTo(("×1,234", "+1,500", "1 record was lost here")));
             Assert.That((gone.Held, gone.Time, gone.Category, gone.Duration), Is.EqualTo((false, "", "", "")));
+            Assert.That((gone.Event, gone.EventTip, gone.CallSite, gone.CallSiteTip, gone.Thread), Is.EqualTo(("", "", "", "", "")), "As it shows no time.");
             Assert.That(gone.Message, Does.StartWith("Overwritten since"));
             Assert.That((scope.Duration, scope.Folded), Is.EqualTo(("open", true)));
             Assert.That(RowCells.Lost(2_500), Is.EqualTo("2,500 records were lost here"));
@@ -687,7 +719,7 @@ namespace Tutan.Logging.Tests
             var batch = new LogBatch(1);
             Assert.That(view.Read(index, 1, batch), Is.EqualTo(1));
             LogRow row = view[index];
-            return RowCells.Of(batch[0], row, view.Source.Clock, ShowsOf(row, ScopeTime.Of(view.Scopes, row.Sequence), folded));
+            return RowCells.Of(batch[0], row, view.Source.Clock, ShowsOf(row, ScopeTime.Of(view.Scopes, row.Sequence), folded), s_paths);
         }
 
         private static Optional<RowScope> Shows(ScopeTime time, bool folded) => F.Some(new RowScope(time, folded));
@@ -713,7 +745,7 @@ namespace Tutan.Logging.Tests
             store.Read(sequence, batch);
             LogRecord record = batch[0];
             Assert.That(record.Sequence, Is.EqualTo(sequence));
-            return RowCells.Of(record, row, view.Source.Clock, ShowsOf(row, ScopeTime.Unknown, folded: false));
+            return RowCells.Of(record, row, view.Source.Clock, ShowsOf(row, ScopeTime.Unknown, folded: false), s_paths);
         }
 
         private static (string, string)[] Frames(IEnumerable<StackFrame> frames) =>

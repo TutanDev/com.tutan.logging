@@ -302,7 +302,8 @@ namespace Tutan.Logging.Tests
                 "A file committed by version 1 reads as it did, whatever its DTO is named in code.");
 
             const string personal = "{ \"Version\": 1, \"ClearOnPlay\": false, \"PauseOnError\": true }";
-            Assert.That(PersonalSettingsFile.Read(personal), Is.EqualTo(new SettingsRead<PersonalSettings>.Read(new PersonalSettings(false, true), SettingsText.NoneSkipped)));
+            Assert.That(PersonalSettingsFile.Read(personal), Is.EqualTo(new SettingsRead<PersonalSettings>.Read(new PersonalSettings(false, true, ColumnLayout.Default), SettingsText.NoneSkipped)),
+                "A file version 1 wrote, before the columns, reads with the columns as they are at first.");
             Assert.That(Unreadable(PersonalSettingsFile.Read("{}")), Does.StartWith("It is of version 0,"), "A file that says no version was written by no console.");
         }
 
@@ -377,7 +378,8 @@ namespace Tutan.Logging.Tests
         [Test]
         public void Personal_settings_read_back_from_their_file_and_no_file_is_the_defaults()
         {
-            var mine = new PersonalSettings(ClearOnPlay: false, PauseOnError: true);
+            var mine = new PersonalSettings(ClearOnPlay: false, PauseOnError: true,
+                ColumnLayout.Default.Showing(ConsoleColumn.Thread, true).Showing(ConsoleColumn.Frame, false).Sizing(ConsoleColumn.CallSite, 240f));
             string json = PersonalSettingsFile.FromDomain(mine).ToJson();
 
             Assert.That(PersonalSettingsFile.Read(json), Is.EqualTo(new SettingsRead<PersonalSettings>.Read(mine, SettingsText.NoneSkipped)));
@@ -385,6 +387,79 @@ namespace Tutan.Logging.Tests
             Assert.That(PersonalSettingsFile.Read(F.None), Is.EqualTo(new SettingsRead<PersonalSettings>.Read(PersonalSettings.Default, SettingsText.NoneSkipped)));
             Assert.That(Unreadable(PersonalSettingsFile.Read("{ \"Version\": 3, \"ClearOnPlay\": false }")), Does.StartWith("It is of version 3,"));
             Assert.That(PersonalSettingsFile.Read("not json").SettingsOr(PersonalSettings.Default), Is.SameAs(PersonalSettings.Default));
+        }
+
+        [Test]
+        public void The_personal_file_holds_each_column_but_the_message_by_name_in_the_order_drawn()
+        {
+            PersonalSettingsFile file = PersonalSettingsFile.FromDomain(PersonalSettings.Default with { Columns = ColumnLayout.Default.Sizing(ConsoleColumn.Time, 100f) });
+
+            Assert.That(file.Columns!.Select(static entry => (entry.Column, entry.Shown, entry.Width)), Is.EqualTo(new[]
+            {
+                ("time", true, 100), ("frame", true, 52), ("level", true, 36), ("category", true, 140), ("event", false, 120),
+                ("duration", true, 64), ("call-site", true, 160), ("thread", false, 48),
+            }));
+
+            const string written = "{ \"Version\": 2, \"ClearOnPlay\": true, \"PauseOnError\": false, \"Columns\": [ "
+                + "{ \"Column\": \"event\", \"Shown\": true, \"Width\": 90 }, { \"Column\": \"time\", \"Shown\": false, \"Width\": 92 } ] }";
+            Assert.That(PersonalSettingsFile.Read(written), Is.EqualTo(new SettingsRead<PersonalSettings>.Read(
+                PersonalSettings.Default with { Columns = ColumnLayout.Default.Showing(ConsoleColumn.Event, true).Sizing(ConsoleColumn.Event, 90f).Showing(ConsoleColumn.Time, false) },
+                SettingsText.NoneSkipped)), "A file of version 2 reads in any order, and a column it has no entry of is as it is at first.");
+        }
+
+        [Test]
+        public void A_file_of_version_1_is_made_one_of_version_2_with_its_toggles_and_no_columns()
+        {
+            var first = new PersonalSettingsFile { Version = 1, ClearOnPlay = false, PauseOnError = true };
+            PersonalSettingsFile second = first.Version2Of1();
+
+            Assert.That((second.Version, second.ClearOnPlay, second.PauseOnError), Is.EqualTo((2, false, true)));
+            Assert.That(second.Columns, Is.Empty, "Its columns are read as they are at first.");
+            Assert.That(first.Version, Is.EqualTo(1), "The file read is left as it is.");
+            Assert.Throws<InvalidOperationException>(() => second.Version2Of1(), "Each step is from one version to the next.");
+        }
+
+        [Test]
+        public void A_column_entry_that_does_not_read_is_skipped_and_said_why()
+        {
+            var file = new PersonalSettingsFile
+            {
+                Version = 2,
+                ClearOnPlay = true,
+                Columns = new[]
+                {
+                    new ColumnEntry { Column = "time", Shown = false, Width = 1000 },
+                    null!,
+                    new ColumnEntry { Column = "Time", Shown = true, Width = 80 },
+                    new ColumnEntry { Column = null, Shown = true, Width = 80 },
+                    new ColumnEntry { Column = "message", Shown = false, Width = 300 },
+                    new ColumnEntry { Column = "frame", Shown = false, Width = 0 },
+                    new ColumnEntry { Column = "frame", Shown = true, Width = 40 },
+                    new ColumnEntry { Column = "time", Shown = true, Width = 70 },
+                    new ColumnEntry { Column = "thread", Shown = true, Width = 2 },
+                },
+            };
+
+            SettingsRead<PersonalSettings>.Read read = file.ToDomain().Match(static read => read, static unreadable => throw new AssertionException(unreadable.Reason));
+
+            Assert.That(read.Settings.Columns, Is.EqualTo(ColumnLayout.Default
+                .Showing(ConsoleColumn.Time, false).Sizing(ConsoleColumn.Time, 160f)
+                .Sizing(ConsoleColumn.Frame, 40f)
+                .Showing(ConsoleColumn.Thread, true).Sizing(ConsoleColumn.Thread, 32f)),
+                "A width is held within its column's bounds, and the first entry of a column read is kept.");
+            Assert.That(read.Skipped.Select(static skipped => skipped.Entry), Is.EqualTo(new[]
+            {
+                "Column 2",
+                "Column 3, \"Time\"",
+                "Column 4, \"\"",
+                "Column 5, \"message\"",
+                "Column 6, \"frame\"",
+                "Column 8, \"time\"",
+            }));
+            Assert.That(read.Skipped.Select(static skipped => skipped.Reason), Has.All.Match(@"[.?!]$"), "Each reason is closed, as the settings page says them in a sentence.");
+            Assert.That(read.Skipped[3].Reason, Does.StartWith("The Message column is always shown"));
+            Assert.That(read.Skipped[5].Reason, Is.EqualTo("An entry before it is of the Time column, and that one is read."));
+            Assert.That(PersonalSettingsFile.FromDomain(read.Settings).Columns!.Length, Is.EqualTo(8), "The next change writes the file without them.");
         }
 
         [Test]

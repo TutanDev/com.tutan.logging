@@ -78,7 +78,10 @@ namespace Tutan.Logging.Editor
             }
         }
 
-        /// <summary>The settings changed, here or on disk: the rows leave out what the project now does, and everything the settings draw is drawn again.</summary>
+        /// <summary>
+        /// The settings changed, here or on disk: the rows leave out what the project now does, and
+        /// everything the settings draw is drawn again, the columns among it, as every window draws the one layout.
+        /// </summary>
         private void SettingsChanged()
         {
             if (!_parts.HasValue(out Parts parts))
@@ -87,7 +90,7 @@ namespace Tutan.Logging.Editor
             if (_bound.HasValue(out Bound bound))
                 bound.Show(_state, _state, ConsoleSettings.Shared.LeftOut);
 
-            DrawToggles(parts);
+            DrawPersonal(parts);
             DrawSaved(parts);
             parts.Rows.RefreshItems();
             parts.Categories.RefreshItems();
@@ -121,8 +124,13 @@ namespace Tutan.Logging.Editor
             return menu;
         }
 
-        /// <summary>Draws the toggles of what the developer keeps, as the settings hold them now.</summary>
-        private static void DrawToggles(Parts parts) => parts.Pause.SetValueWithoutNotify(ConsoleSettings.Personal.PauseOnError);
+        /// <summary>Draws what the developer keeps, as the settings hold it now: the toggles and the columns.</summary>
+        private void DrawPersonal(Parts parts)
+        {
+            PersonalSettings personal = ConsoleSettings.Personal;
+            parts.Pause.SetValueWithoutNotify(personal.PauseOnError);
+            DrawColumns(parts, personal.Columns);
+        }
 
         private static Toolbar MakeSaved()
         {
@@ -201,12 +209,16 @@ namespace Tutan.Logging.Editor
         private void ChangeShared(Func<SharedSettings, Result<SharedSettings>> change) =>
             ConsoleSettings.ChangeShared(change).Match(refused => Say(new Told.Trouble(refused.Message)), static _ => { });
 
-        /// <summary>Changes what the developer keeps, as <paramref name="change"/> makes it, and says why when it cannot be written, drawing the toggles back.</summary>
+        /// <summary>
+        /// Changes what the developer keeps, as <paramref name="change"/> makes it, and says why when it
+        /// cannot be written. Then it draws what the settings hold in every case: written, as every window
+        /// does; nothing written, or refused, so this one shows no toggle or column that is neither saved nor the others'.
+        /// </summary>
         private void ChangePersonal(Func<PersonalSettings, PersonalSettings> change)
         {
             ConsoleSettings.ChangePersonal(change).Match(refused => Say(new Told.Trouble(refused.Message)), static _ => { });
             if (_parts.HasValue(out Parts parts))
-                DrawToggles(parts);
+                DrawPersonal(parts);
         }
 
         /// <summary>What the saved filters' buttons were made of: the filters, by reference, as a change makes another list, and the skin their colours are of.</summary>

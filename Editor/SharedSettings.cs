@@ -371,10 +371,23 @@ namespace Tutan.Logging.Editor
     /// <summary>What one developer keeps of the console, in their own settings.</summary>
     /// <param name="ClearOnPlay">Whether entering Play Mode clears the console.</param>
     /// <param name="PauseOnError">Whether an error that arrives while playing pauses the game.</param>
-    internal sealed record PersonalSettings(bool ClearOnPlay, bool PauseOnError)
+    /// <param name="Columns">Which columns of the rows every console window shows, and how wide.</param>
+    internal sealed record PersonalSettings(bool ClearOnPlay, bool PauseOnError, ColumnLayout Columns)
     {
-        /// <summary>Clear on Play, as Unity's Console has it, and no Pause on Error.</summary>
-        public static PersonalSettings Default { get; } = new PersonalSettings(ClearOnPlay: true, PauseOnError: false);
+        private readonly ColumnLayout _columns = Held(Columns);
+
+        /// <summary>Clear on Play, as Unity's Console has it, no Pause on Error, and the columns as they are at first.</summary>
+        public static PersonalSettings Default { get; } = new PersonalSettings(ClearOnPlay: true, PauseOnError: false, ColumnLayout.Default);
+
+        /// <summary>Which columns every console window shows, and how wide: a layout always, whether made or set by <c>with</c>.</summary>
+        public ColumnLayout Columns
+        {
+            get => _columns;
+            init => _columns = Held(value);
+        }
+
+        private static ColumnLayout Held(ColumnLayout columns) =>
+            columns ?? throw new ArgumentNullException(nameof(Columns), "Personal settings hold a column layout: ColumnLayout.Default is the one at first.");
     }
 
     /// <summary>The colour a category or a saved filter is drawn in.</summary>

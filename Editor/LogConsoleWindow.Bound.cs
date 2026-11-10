@@ -43,10 +43,13 @@ namespace Tutan.Logging.Editor
             // within one tick with rows that look as many as before, so it is told by this.
             private int _scans;
 
-            private Bound(LogView view)
+            private readonly UnityPaths _paths;
+
+            private Bound(LogView view, UnityPaths paths)
             {
                 View = view;
                 Tree = CategoryTree.Of(view.Source.Events);
+                _paths = paths;
             }
 
             /// <summary>The rows of the session shown.</summary>
@@ -62,13 +65,18 @@ namespace Tutan.Logging.Editor
             /// <summary>What of the rows the lines under the query line are of.</summary>
             public RowsSaid Said => new RowsSaid(View.Shown, _scans, View.Source.Events.Count, View.GaveUp.Count, View.Lost);
 
-            /// <summary>A view of <paramref name="records"/> as <paramref name="state"/> asks: its filter, leaving out <paramref name="leftOut"/> after it, and the scopes it folds.</summary>
-            public static Bound Of(LogRecords records, ConsoleState state, LeftOut leftOut)
+            /// <summary>
+            /// A view of <paramref name="records"/> as <paramref name="state"/> asks: its filter, leaving out
+            /// <paramref name="leftOut"/> after it, and the scopes it folds; its call sites mapped by <paramref name="paths"/>.
+            /// </summary>
+            public static Bound Of(LogRecords records, ConsoleState state, LeftOut leftOut, UnityPaths paths)
             {
                 if (leftOut is null)
                     throw new System.ArgumentNullException(nameof(leftOut));
+                if (paths is null)
+                    throw new System.ArgumentNullException(nameof(paths));
 
-                var bound = new Bound(new LogView(records, leftOut.From(state.Filter)));
+                var bound = new Bound(new LogView(records, leftOut.From(state.Filter)), paths);
                 bound.Refold(ScopeSet.Empty, state.Folded);
                 return bound;
             }
@@ -139,7 +147,7 @@ namespace Tutan.Logging.Editor
 
                 Optional<RowScope> shows = scope ? F.Some(new RowScope(ScopeTime.Of(View.Scopes, row.Sequence), folded)) : F.None;
                 RowCells cells = View.Read(index, 1, _record) == 1
-                    ? RowCells.Of(_record[0], row, View.Source.Clock, shows)
+                    ? RowCells.Of(_record[0], row, View.Source.Clock, shows, _paths)
                     : RowCells.Gone(row, shows);
                 _cells[row.Sequence] = HeldCells.Of(cells, first);
                 return cells;

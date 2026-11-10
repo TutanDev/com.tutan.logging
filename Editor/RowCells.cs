@@ -6,20 +6,27 @@ namespace Tutan.Logging.Editor
 {
     /// <summary>
     /// A row as the list draws it, each column's text read once: when, the frame, the level, the
-    /// category, the message, and what the row adds of its own - how many it repeats, how many a
-    /// limit dropped, how long a scope took, whether it is folded, and the records lost before it.
+    /// category, the event, the message, where it was written and the thread, and what the row adds
+    /// of its own - how many it repeats, how many a limit dropped, how long a scope took, whether it
+    /// is folded, and the records lost before it.
     /// </summary>
     internal sealed record RowCells
     {
         private static readonly char[] s_lineEnds = { '\r', '\n' };
 
-        private RowCells(LogRow row, string time, string frame, string category, string message, bool context, bool held, Optional<RowScope> scope)
+        private RowCells(
+            LogRow row, string time, string frame, string category, string message, bool context, bool held, Optional<RowScope> scope, Written written)
         {
             Row = row;
             Time = time;
             Frame = frame;
             Category = category;
             Message = message;
+            Event = written.Event;
+            EventTip = written.EventTip;
+            CallSite = written.CallSite;
+            CallSiteTip = written.CallSiteTip;
+            Thread = written.Thread;
             Context = context;
             Held = held;
             bool ofScope = scope.HasValue(out RowScope shows);
@@ -49,6 +56,21 @@ namespace Tutan.Logging.Editor
 
         /// <summary>Its message, or what is known of it when its records are gone.</summary>
         public string Message { get; }
+
+        /// <summary>Its event's name, as <c>Saved</c>, or empty when its records are gone.</summary>
+        public string Event { get; }
+
+        /// <summary>Its event's key, as <c>game.save/Saved</c>, which the event's cell says when pointed at, or empty.</summary>
+        public string EventTip { get; }
+
+        /// <summary>Where it was written, as <c>SaveManager.cs:42</c>, or empty when that is not known.</summary>
+        public string CallSite { get; }
+
+        /// <summary>Where it was written, as Unity opens it, <c>Assets/Game/SaveManager.cs:42</c>, which the call site's cell says when pointed at, or empty.</summary>
+        public string CallSiteTip { get; }
+
+        /// <summary>The managed thread it was written on, as <c>1</c>, or empty when its records are gone.</summary>
+        public string Thread { get; }
 
         /// <summary>Whether it was written as an error's context.</summary>
         public bool Context { get; }
@@ -91,18 +113,25 @@ namespace Tutan.Logging.Editor
         /// <param name="row">The row.</param>
         /// <param name="clock">The clock of the session's records.</param>
         /// <param name="scope">What a scope's row shows of its scope: none for a row that is not a scope's.</param>
+        /// <param name="paths">How the file it was written in is mapped to the path Unity opens.</param>
         /// <exception cref="ArgumentException">
         /// <paramref name="record"/> is not the record of <paramref name="row"/>, or <paramref name="scope"/>
         /// is some for a row that is not a scope's, or none for one that is.
         /// </exception>
-        public static RowCells Of(LogRecord record, LogRow row, LogClock clock, Optional<RowScope> scope)
+        public static RowCells Of(LogRecord record, LogRow row, LogClock clock, Optional<RowScope> scope, UnityPaths paths)
         {
+            if (paths is null)
+                throw new ArgumentNullException(nameof(paths));
             CheckRecord(record, row);
             CheckScope(row, scope);
 
             string frame = record.Frame != 0 ? record.Frame.ToString(CultureInfo.InvariantCulture) : "";
-            return new RowCells(row, Clock(clock.At(record.Timestamp)), frame, record.Event.Category, FirstLine(record.ToString()), record.IsBacklog,
-                held: true, scope);
+            LogEventSpec spec = record.Event;
+            bool at = WrittenAt(record, paths).HasValue(out SourcePlace place);
+            var written = new Written(
+                spec.Name, spec.Key, at ? place.Short : "", at ? place.ToString() : "", record.Thread.ToString(CultureInfo.InvariantCulture));
+            return new RowCells(row, Clock(clock.At(record.Timestamp)), frame, spec.Category, FirstLine(record.ToString()), record.IsBacklog,
+                held: true, scope, written);
         }
 
         /// <summary>The cells of <paramref name="row"/>, whose records the session has overwritten since it was made.</summary>
@@ -113,8 +142,60 @@ namespace Tutan.Logging.Editor
         {
             CheckScope(row, scope);
 
-            return new RowCells(row, "", "", "", "Overwritten since: the session no longer holds this record.", context: false, held: false, scope);
+            return new RowCells(row, "", "", "", "Overwritten since: the session no longer holds this record.", context: false, held: false, scope, Written.Nothing);
         }
+
+        /// <summary>
+        /// Where <paramref name="record"/> was written: its own call site, or else, for a message Unity's
+        /// log handed over, which has none, the first frame of its stack that is in the project, as
+        /// <see cref="RecordDetails.Opens"/> opens it; none when neither says.
+        /// </summary>
+        private static Optional<SourcePlace> WrittenAt(LogRecord record, UnityPaths paths)
+        {
+            LogCallSite site = record.CallSite;
+            Optional<SourcePlace> own = SourcePlace.Of(site.File, site.Line, paths);
+            if (own.IsSome || !StackFrames.HoldsUnityStack(record.Event))
+                return own;
+
+            for (int i = 0; i < record.FieldCount; i++)
+            {
+                LogValue value = record.Field(i);
+                if (StackFrames.IsUnityStack(value) && !value.IsNone)
+                    return StackFrames.FirstInProject(StackFrames.OfUnity(value.ToString(), paths));
+            }
+
+            return F.None;
+        }
+
+        /// <summary>
+        /// What the cell of <paramref name="column"/> says, read when the cells were. The message's
+        /// cell says <see cref="Message"/>, with the marks of the row beside it.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="column"/> is not a column.</exception>
+        public string Text(ConsoleColumn column) => column switch
+        {
+            ConsoleColumn.Time => Time,
+            ConsoleColumn.Frame => Frame,
+            ConsoleColumn.Level => TextLinesSink.Short(Row.Level),
+            ConsoleColumn.Category => Category,
+            ConsoleColumn.Event => Event,
+            ConsoleColumn.Message => Message,
+            ConsoleColumn.Duration => Duration,
+            ConsoleColumn.CallSite => CallSite,
+            ConsoleColumn.Thread => Thread,
+            _ => throw ConsoleColumns.Unknown(column),
+        };
+
+        /// <summary>What the cell of <paramref name="column"/> says when pointed at: the event's key, the call site's path, or empty.</summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="column"/> is not a column.</exception>
+        public string Tip(ConsoleColumn column) => column switch
+        {
+            ConsoleColumn.Event => EventTip,
+            ConsoleColumn.CallSite => CallSiteTip,
+            ConsoleColumn.Time or ConsoleColumn.Frame or ConsoleColumn.Level or ConsoleColumn.Category
+                or ConsoleColumn.Message or ConsoleColumn.Duration or ConsoleColumn.Thread => "",
+            _ => throw ConsoleColumns.Unknown(column),
+        };
 
         /// <summary>
         /// Refuses <paramref name="record"/> unless it is the record of <paramref name="row"/>, as
@@ -170,6 +251,31 @@ namespace Tutan.Logging.Editor
         {
             int end = message.IndexOfAny(s_lineEnds);
             return end < 0 ? message : message.Substring(0, end) + " …";
+        }
+
+        /// <summary>What a row says of how its record was written: its event, where, and on which thread; nothing for a row whose records are gone.</summary>
+        private readonly struct Written
+        {
+            public Written(string @event, string eventTip, string callSite, string callSiteTip, string thread)
+            {
+                Event = @event;
+                EventTip = eventTip;
+                CallSite = callSite;
+                CallSiteTip = callSiteTip;
+                Thread = thread;
+            }
+
+            public static Written Nothing => new Written("", "", "", "", "");
+
+            public string Event { get; }
+
+            public string EventTip { get; }
+
+            public string CallSite { get; }
+
+            public string CallSiteTip { get; }
+
+            public string Thread { get; }
         }
     }
 

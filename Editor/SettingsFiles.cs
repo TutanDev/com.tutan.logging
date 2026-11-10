@@ -292,12 +292,14 @@ namespace Tutan.Logging.Editor
     /// Every change of what the file holds is a new <see cref="Current"/>, as for
     /// <see cref="SharedSettingsFile"/>. It matters more here: <c>UserSettings/</c> is not under source
     /// control, so the file stays as it is while a branch checked out changes the package's version.
+    /// A file of an older version is made one of the next first, a step for each version, and only the
+    /// newest is read into settings.
     /// </remarks>
     [Serializable]
     internal sealed class PersonalSettingsFile
     {
-        /// <summary>The version this package writes.</summary>
-        public const int Current = 1;
+        /// <summary>The version this package writes: 2 added the columns.</summary>
+        public const int Current = 2;
 
         /// <summary>The version that wrote it: 0 for a file that says none.</summary>
         public int Version;
@@ -308,27 +310,138 @@ namespace Tutan.Logging.Editor
         /// <summary>Whether an error that arrives while playing pauses the game.</summary>
         public bool PauseOnError;
 
-        /// <summary>What <paramref name="settings"/> is written as.</summary>
+        /// <summary>Each column but the one that fills, in the order drawn: from version 2.</summary>
+        public ColumnEntry[]? Columns;
+
+        /// <summary>What <paramref name="settings"/> is written as: its columns in the order drawn, so a change reads as a small diff.</summary>
         public static PersonalSettingsFile FromDomain(PersonalSettings settings)
         {
             if (settings is null)
                 throw new ArgumentNullException(nameof(settings));
 
-            return new PersonalSettingsFile { Version = Current, ClearOnPlay = settings.ClearOnPlay, PauseOnError = settings.PauseOnError };
+            return new PersonalSettingsFile
+            {
+                Version = Current,
+                ClearOnPlay = settings.ClearOnPlay,
+                PauseOnError = settings.PauseOnError,
+                Columns = settings.Columns.Sized.Select(static shown => new ColumnEntry
+                {
+                    Column = ColumnEntry.NameOf(shown.Column),
+                    Shown = shown.Shown,
+                    Width = shown.Width,
+                }).ToArray(),
+            };
         }
 
         /// <summary>The file's text, none for no file, read as the settings it holds.</summary>
         public static SettingsRead<PersonalSettings> Read(Optional<string> text) =>
             SettingsText.Read<PersonalSettingsFile, PersonalSettings>(text, PersonalSettings.Default, static file => file.ToDomain());
 
-        /// <summary>The settings it holds, as its <see cref="Version"/> wrote them.</summary>
+        /// <summary>The settings it holds, as its <see cref="Version"/> wrote them: a file of version 1 made one of version 2 first.</summary>
         public SettingsRead<PersonalSettings> ToDomain() => Version switch
         {
-            1 => new SettingsRead<PersonalSettings>.Read(new PersonalSettings(ClearOnPlay, PauseOnError), SettingsText.NoneSkipped),
+            1 => Version2Of1().ToDomain(),
+            2 => ReadVersion2(),
             _ => SettingsText.UnknownVersion<PersonalSettings>(Version),
         };
 
+        /// <summary>This file, of version 1, as one of version 2: its toggles as they are, and no columns, which read as they are at first.</summary>
+        /// <exception cref="InvalidOperationException">It is not of version 1.</exception>
+        public PersonalSettingsFile Version2Of1()
+        {
+            if (Version != 1)
+                throw new InvalidOperationException($"Only a file of version 1 is made one of version 2, and this is of version {Version.ToString(CultureInfo.InvariantCulture)}.");
+
+            return new PersonalSettingsFile { Version = 2, ClearOnPlay = ClearOnPlay, PauseOnError = PauseOnError, Columns = Array.Empty<ColumnEntry>() };
+        }
+
         /// <summary>It as JSON, indented.</summary>
         public string ToJson() => JsonUtility.ToJson(this, prettyPrint: true);
+
+        /// <summary>
+        /// The settings of version 2: the columns read from <see cref="ColumnLayout.Default"/>, entry by
+        /// entry, each that does not read skipped and said why. Of two entries of one column, the first
+        /// kept is read; a width read is held within its column's bounds.
+        /// </summary>
+        private SettingsRead<PersonalSettings> ReadVersion2()
+        {
+            var skipped = new List<SettingSkipped>();
+            var read = new HashSet<ConsoleColumn>();
+            ColumnLayout columns = ColumnLayout.Default;
+            ColumnEntry?[] entries = Columns ?? Array.Empty<ColumnEntry>();
+            for (int i = 0; i < entries.Length; i++)
+            {
+                ColumnEntry? entry = entries[i];
+                string which = $"Column {(i + 1).ToString(CultureInfo.InvariantCulture)}";
+                if (entry is null)
+                {
+                    skipped.Add(new SettingSkipped(which, "It is empty."));
+                    continue;
+                }
+
+                which += $", \"{entry.Column}\"";
+                if (!ColumnEntry.Named(entry.Column).HasValue(out ConsoleColumn column))
+                    skipped.Add(new SettingSkipped(which, "No column of the console is named so."));
+                else if (ConsoleColumns.Fills(column))
+                    skipped.Add(new SettingSkipped(which, $"The {ConsoleColumns.Title(column)} column is always shown, as wide as the room the others leave."));
+                else if (entry.Width < 1)
+                    skipped.Add(new SettingSkipped(which, "Its width is under 1 pixel."));
+                else if (!read.Add(column))
+                    skipped.Add(new SettingSkipped(which, $"An entry before it is of the {ConsoleColumns.Title(column)} column, and that one is read."));
+                else
+                    columns = columns.Showing(column, entry.Shown).Sizing(column, entry.Width);
+            }
+
+            var settings = new PersonalSettings(ClearOnPlay, PauseOnError, columns);
+            return new SettingsRead<PersonalSettings>.Read(settings, skipped.Count > 0 ? Array.AsReadOnly(skipped.ToArray()) : SettingsText.NoneSkipped);
+        }
+    }
+
+    /// <summary>A column of the rows, as the personal file holds it: whether it is shown, and how wide.</summary>
+    [Serializable]
+    internal sealed class ColumnEntry
+    {
+        /// <summary>The column's name, as <see cref="NameOf"/> writes it.</summary>
+        public string? Column;
+
+        /// <summary>Whether it is shown.</summary>
+        public bool Shown;
+
+        /// <summary>How many pixels wide it is.</summary>
+        public int Width;
+
+        /// <summary>
+        /// The name a file holds <paramref name="column"/> by, as <c>call-site</c>: written once and
+        /// never changed, so every file a package wrote reads, whatever the stylesheet calls it.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="column"/> is not a column.</exception>
+        public static string NameOf(ConsoleColumn column) => column switch
+        {
+            ConsoleColumn.Time => "time",
+            ConsoleColumn.Frame => "frame",
+            ConsoleColumn.Level => "level",
+            ConsoleColumn.Category => "category",
+            ConsoleColumn.Event => "event",
+            ConsoleColumn.Message => "message",
+            ConsoleColumn.Duration => "duration",
+            ConsoleColumn.CallSite => "call-site",
+            ConsoleColumn.Thread => "thread",
+            _ => throw ConsoleColumns.Unknown(column),
+        };
+
+        /// <summary>The column a file names <paramref name="name"/>, as spelt: none for none given, or a name no column has.</summary>
+        public static Optional<ConsoleColumn> Named(string? name)
+        {
+            if (name is null)
+                return F.None;
+
+            foreach (ConsoleColumn column in ConsoleColumns.All)
+            {
+                if (string.Equals(NameOf(column), name, StringComparison.Ordinal))
+                    return column;
+            }
+
+            return F.None;
+        }
     }
 }

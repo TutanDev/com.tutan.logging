@@ -30,6 +30,10 @@ namespace Tutan.Logging.Editor
     /// and what the developer keeps, and each window draws again when they change.
     /// </para>
     /// <para>
+    /// The rows' columns are what the developer keeps, one <see cref="ColumnLayout"/> every window
+    /// draws: what the header asks of them is kept until the next tick, and written then as one change.
+    /// </para>
+    /// <para>
     /// A shortcut that opens it is registered with no key, for a developer to bind in Edit > Shortcuts.
     /// </para>
     /// </remarks>
@@ -163,7 +167,7 @@ namespace Tutan.Logging.Editor
             said.AddToClassList("said");
             root.Add(said);
 
-            ListView rows = MakeRows();
+            MultiColumnListView rows = MakeRows(ConsoleSettings.Personal.Columns);
             ScrollView details = MakeDetails();
             var rowsAndDetails = new TwoPaneSplitView(1, 220, TwoPaneSplitViewOrientation.Vertical) { viewDataKey = "log-console-rows" };
             rowsAndDetails.Add(rows);
@@ -180,14 +184,17 @@ namespace Tutan.Logging.Editor
             var parts = new Parts(root, dark, session, follow, pause, saved, status, query, said, rows, details, categories, badges);
             _parts = parts;
             _sessions = Array.Empty<LogConsoleSession>();
-            DrawToggles(parts);
+            DrawPersonal(parts);
             Refresh(parts, redraw: true);
         }
 
         private void Tick()
         {
-            if (_parts.HasValue(out Parts parts))
-                Refresh(parts, redraw: false);
+            if (!_parts.HasValue(out Parts parts))
+                return;
+
+            TakeColumnsAsked();
+            Refresh(parts, redraw: false);
         }
 
         /// <summary>
@@ -297,7 +304,7 @@ namespace Tutan.Logging.Editor
             if (same)
                 return;
 
-            _bound = records.HasValue(out LogArchive archive) ? F.Some(Bound.Of(archive, _state, ConsoleSettings.Shared.LeftOut)) : F.None;
+            _bound = records.HasValue(out LogArchive archive) ? F.Some(Bound.Of(archive, _state, ConsoleSettings.Shared.LeftOut, Paths)) : F.None;
             parts.Categories.itemsSource = Tree.Nodes;
             DrawAll(parts, shown);
         }
@@ -604,7 +611,7 @@ namespace Tutan.Logging.Editor
         private sealed class Parts
         {
             public Parts(VisualElement root, bool dark, ToolbarButton session, ToolbarToggle follow, ToolbarToggle pause, Toolbar saved, Label status,
-                TextField query, VisualElement said, ListView rows, ScrollView details, ListView categories, ReadOnlyCollection<ToolbarButton> badges)
+                TextField query, VisualElement said, MultiColumnListView rows, ScrollView details, ListView categories, ReadOnlyCollection<ToolbarButton> badges)
             {
                 Root = root;
                 Dark = dark;
@@ -646,7 +653,7 @@ namespace Tutan.Logging.Editor
             public VisualElement Said { get; }
 
             /// <summary>The rows.</summary>
-            public ListView Rows { get; }
+            public MultiColumnListView Rows { get; }
 
             /// <summary>The details of the row focused.</summary>
             public ScrollView Details { get; }

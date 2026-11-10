@@ -85,6 +85,18 @@ namespace Tutan.Logging.Editor
     {
         private static readonly ReadOnlyCollection<StackFrame> s_none = Array.AsReadOnly(Array.Empty<StackFrame>());
 
+        // By key, not by spec: a session read from a file has specs of its own.
+        private static readonly string s_loggedKey = UnityLog.Events.Logged.Key;
+
+        /// <summary>
+        /// Whether a record of <paramref name="spec"/> is a message Unity's log handed over, which has
+        /// no call site of its own and holds its stack as a field, which <see cref="IsUnityStack"/> tells.
+        /// </summary>
+        public static bool HoldsUnityStack(LogEventSpec spec) => spec.Key == s_loggedKey;
+
+        /// <summary>Whether <paramref name="value"/>, a field of a record that <see cref="HoldsUnityStack"/>, is that stack, read by <see cref="OfUnity"/>.</summary>
+        public static bool IsUnityStack(LogValue value) => value.Field.Name == UnityLog.StackTraceField && value.Kind == LogValueKind.String;
+
         /// <summary>
         /// The frames of a stack Unity's log handed over: a line each, as
         /// <c>Game.SaveManager:Save () (at Assets/Game/SaveManager.cs:42)</c>, or an exception's own
@@ -97,6 +109,25 @@ namespace Tutan.Logging.Editor
         /// that starts <c>at</c>, its inner exceptions' among them: what is not a frame is skipped.
         /// </summary>
         public static ReadOnlyCollection<StackFrame> OfException(string text, UnityPaths paths) => Parse(text, paths, onlyAt: true);
+
+        /// <summary>
+        /// Where the first of <paramref name="frames"/> that is in the project is: the code that
+        /// wrote what the stack is of, past the engine's and the packages' own frames; none when no
+        /// frame is in the project.
+        /// </summary>
+        public static Optional<SourcePlace> FirstInProject(IReadOnlyList<StackFrame> frames)
+        {
+            if (frames is null)
+                throw new ArgumentNullException(nameof(frames));
+
+            for (int i = 0; i < frames.Count; i++)
+            {
+                if (frames[i].At.HasValue(out SourcePlace at) && at.InProject)
+                    return at;
+            }
+
+            return F.None;
+        }
 
         private static ReadOnlyCollection<StackFrame> Parse(string text, UnityPaths paths, bool onlyAt)
         {

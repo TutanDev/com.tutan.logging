@@ -184,7 +184,7 @@ namespace Tutan.Logging.Tests
             Assert.That(UnseenText.Badge(12_345), Is.EqualTo(CountText.Compact(12_345)));
             Assert.That(UnseenText.BadgeTip(1), Is.EqualTo("An error the log console has not shown. Press to show it."));
             Assert.That(UnseenText.BadgeTip(12_345), Is.EqualTo("12,345 errors the log console has not shown. Press to show the first."));
-            Assert.That(PersonalSettings.Default, Is.EqualTo(new PersonalSettings(ClearOnPlay: true, PauseOnError: false)), "As Unity's Console has it.");
+            Assert.That(PersonalSettings.Default, Is.EqualTo(new PersonalSettings(ClearOnPlay: true, PauseOnError: false, ColumnLayout.Default)), "As Unity's Console has it.");
         }
 
         /// <summary>A file of one error, named <paramref name="name"/>.</summary>

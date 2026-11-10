@@ -66,7 +66,8 @@ namespace Tutan.Logging.Editor
             page.Add(Note("Log Console", "settings-title"));
             page.Add(Note(
                 $"What the team shares of the log console, kept in {ConsoleSettings.SharedPath} and committed with the project. "
-                + "Clear on Play and Pause on Error are each developer's own, in the console's toolbar.", "settings-note"));
+                + $"Clear on Play, Pause on Error and the rows' columns are each developer's own, in the console's toolbar and the rows' header, kept in {ConsoleSettings.PersonalPath}.",
+                "settings-note"));
 
             ConsoleSettings.SharedRead.Match(
                 read =>
@@ -79,6 +80,24 @@ namespace Tutan.Logging.Editor
                 {
                     page.Add(new HelpBox(
                         $"{ConsoleSettings.SharedPath} cannot be read, so the console shares nothing and writes nothing over it: {unreadable.Reason} "
+                        + "Fix or delete it, and the console reads it again when the editor has focus again.", HelpBoxMessageType.Error));
+                    return default(Unit);
+                });
+
+            // What the developer keeps is theirs, in UserSettings, and the toolbar and the rows' header change it: here is only how it read.
+            ConsoleSettings.PersonalRead.Match(
+                read =>
+                {
+                    foreach (SettingSkipped skipped in read.Skipped)
+                        page.Add(new HelpBox(
+                            $"{skipped.Entry} of {ConsoleSettings.PersonalPath} was left out, as it does not read: {skipped.Reason} The next change writes the file without it.",
+                            HelpBoxMessageType.Warning));
+                    return default(Unit);
+                },
+                unreadable =>
+                {
+                    page.Add(new HelpBox(
+                        $"{ConsoleSettings.PersonalPath} cannot be read, so the console goes by the defaults of your own settings and writes nothing over it: {unreadable.Reason} "
                         + "Fix or delete it, and the console reads it again when the editor has focus again.", HelpBoxMessageType.Error));
                     return default(Unit);
                 });
