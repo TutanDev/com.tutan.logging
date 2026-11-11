@@ -143,27 +143,31 @@ Marks a parameter whose field can name a person, which a sink can redact.
 
 | Member | Description |
 |---|---|
-| `LogRules(LogLevel least, params LogRule[] rules)` | Every event held to `least`, but where the rules say otherwise |
-| `static LogRules Default` | `debug`, and no rules |
+| `LogRules(LogLevel least, params LogRule[] rules)` | Every event held to `least`, but where the rules say otherwise, with stacks from `DefaultStackLevel` |
+| `LogRules(LogLevel least, LogLevel stackLevel, params LogRule[] rules)` | The same, with stacks from `stackLevel`, `None` for none; a level that is none of `Trace` to `None`, here or in a rule, throws `ArgumentOutOfRangeException` |
+| `const LogLevel DefaultStackLevel` | `Error`: the stack level where the rules say none |
+| `static LogRules Default` | `debug`, stacks from `error`, and no rules |
 | `LogLevel Least` | The least level where no rule says otherwise |
+| `LogLevel StackLevel` | The least level a record carries its stack from, where no rule says otherwise; `None` for none |
 | `IReadOnlyList<LogRule> Rules` | The rules, in order |
 | `static Result<LogRules> Parse(string text)` | Rules from their text, failing with a `LogRulesError` code |
 | `LogLevel LeastFor(LogEventSpec spec)` | The least level an event is captured at; `None` when off |
+| `LogLevel StackLevelFor(LogEventSpec spec)` | The least level a record of an event carries its stack from; `None` for none |
 | `int PerSecondFor(LogEventSpec spec)` | An event's limit, from the most specific rule or its own; 0 for none |
 | `IReadOnlyList<LogRule> MatchingNothing(IReadOnlyList<LogEventSpec> specs)` | The rules whose patterns match none of the specs |
 | `static string Name(LogLevel level)` | A level's name as rules spell it |
 | `static bool TryLevel(string text, out LogLevel level)` | A level from its name, ignoring case |
 | `ToString()` | The text `Parse` reads back as these rules |
-| `Equals`, `GetHashCode` | Equal when the least and every rule, in order, are |
+| `Equals`, `GetHashCode` | Equal when the least, the stack level and every rule, in order, are |
 
 ### `LogRule` (record)
 
-`LogRule(string Pattern, Optional<LogLevel> Least, Optional<int> PerSecond)`: for the events a pattern names, a least level (`None` for off), a limit, or both.
+`LogRule(string Pattern, Optional<LogLevel> Least, Optional<int> PerSecond, Optional<LogLevel> StackLevel = default)`: for the events a pattern names, a least level (`None` for off), a limit, a stack level (`None` for none), or more than one.
 `ToString()` writes it as `Parse` reads it.
 
 ### `LogRulesError`
 
-`NotALevel`, `NotAPattern`, `NotALimit`, `LeastTwice`: the `Error.Code` of a failed `Parse`.
+`NotALevel`, `NotAPattern`, `NotALimit`, `LeastTwice`, `StackLevelTwice`: the `Error.Code` of a failed `Parse`.
 
 ## Records
 
@@ -183,6 +187,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `int Suppressed` | How many records of its event a limit dropped before it |
 | `bool IsBacklog` | Whether a sink was handed it as an error's backlog; never for a store's |
 | `LogCallSite CallSite` | The call that wrote it |
+| `Optional<LogStack> Stack` | The stack it was written from, when at its event's stack level; never for a scope's closing |
 | `LogEventSpec Event` | Its event or scope |
 | `int FieldCount` | How many fields it has |
 | `LogValue Field(int index)` | A field, in the order of the spec's |
@@ -203,6 +208,24 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `int Line` | The line from 1, or 0 |
 | `bool IsKnown` | Whether the record has a call site |
 | `ToString()` | `File:Line`, or empty |
+
+### `LogStack`
+
+| Member | Description |
+|---|---|
+| `LogStack(IEnumerable<LogStackFrame> frames)` | A stack of these frames, as a reader of a file makes one; no frames, or a `default` frame, throws `ArgumentException` |
+| `IReadOnlyList<LogStackFrame> Frames` | The frames, one at least, from the method that made the call outward |
+| `Equals`, `GetHashCode` | Equal when every frame, in order, is |
+| `ToString()` | A line a frame |
+
+### `LogStackFrame` (readonly struct)
+
+| Member | Description |
+|---|---|
+| `LogStackFrame(string method, LogCallSite at)` | A frame |
+| `string Method` | Its method, as `Game.SaveManager.Save(int)`, with a by-ref parameter as `ref int`, `out int` or `in int` |
+| `LogCallSite At` | The file and line of the call it made, unknown where the build had no symbols |
+| `ToString()` | `Method (at File:Line)`, or the method alone |
 
 ### `LogValue` (readonly ref struct)
 
@@ -334,6 +357,7 @@ Marks a parameter whose field can name a person, which a sink can redact.
 | `bool TryFormat(LogRecord record, Span<char> destination, out int written)` | A record's message with the sink's redaction |
 | `string Text(LogRecord record)` | The same, as a string |
 | `string Text(LogValue value)` | A field's value as a string, with the sink's redaction: an exception's whole text |
+| `string Text(LogStack stack)` | A stack as a string, a line a frame, with the home folder left out when the sink leaves it out |
 
 ## Sinks
 
@@ -458,7 +482,7 @@ A first line past 64K characters is `NotALog`, as no header is that long.
 
 ### `MemoryRecord` (record)
 
-`MemoryRecord(long Sequence, long Frame, long Scope, long Begin, int Thread, LogLevel Level, LogRecordKind Kind, LogEventSpec Event, int Suppressed, bool Backlog, TimeSpan Elapsed, LogCallSite CallSite, string Message, IReadOnlyList<MemoryField> Fields)`.
+`MemoryRecord(long Sequence, long Frame, long Scope, long Begin, int Thread, LogLevel Level, LogRecordKind Kind, LogEventSpec Event, int Suppressed, bool Backlog, TimeSpan Elapsed, LogCallSite CallSite, string Message, IReadOnlyList<MemoryField> Fields, Optional<LogStack> Stack = default)`.
 `object? Field(string name)` is a field's value by name, ignoring case, and throws `KeyNotFoundException` when there is none.
 
 ### `MemoryField` (record)

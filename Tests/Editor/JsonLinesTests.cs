@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
@@ -171,7 +172,8 @@ namespace Tutan.Logging.Tests
                 log.Failed(1, new InvalidOperationException("The disk is full."));
             }));
 
-            string Fields(string key) => Regex.Match(lines.Single(l => l.Contains($"\"key\":\"{key}\"")), "\"fields\":(\\{.*\\})\\}$").Groups[1].Value;
+            // The fields end a line, but for an error's stack after them.
+            string Fields(string key) => Regex.Match(lines.Single(l => l.Contains($"\"key\":\"{key}\"")), "\"fields\":(\\{.*\\})(,\"stack\":\\[.*\\])?\\}$").Groups[1].Value;
 
             Assert.That(Fields("tests.fields/Numbers"), Is.EqualTo(
                 "{\"Flag\":true,\"Letter\":\"x\",\"Tiny\":-5,\"Small\":200,\"Short\":-300,\"Word\":60000,\"Int\":-70000," +
@@ -225,6 +227,19 @@ namespace Tutan.Logging.Tests
             Assert.That(record, Does.Contain("\"msg\":\"Signed in as [personal] from C:/Saves\""));
             Assert.That(record, Does.Contain("\"fields\":{\"Email\":\"[personal]\",\"Folder\":\"C:/Saves\"}"));
             Assert.That(string.Join("\n", lines), Does.Not.Contain("ann@example.com"));
+        }
+
+        [Test]
+        public void A_records_stack_follows_its_fields_a_frame_an_object()
+        {
+            string[] lines = Ours(Lines(FailFromHere));
+
+            string failed = lines.Single(l => l.Contains("\"key\":\"tests.save/Failed\""));
+            Assert.That(failed, Does.Match(
+                "\"fields\":\\{.*\\},\"stack\":\\[\\{\"method\":\"Tutan\\.Logging\\.Tests\\.JsonLinesTests\\.FailFromHere\\(Log\\)\",\"file\":\"\\*\",\"line\":\\*\\}" +
+                "(,\\{\"method\":\"[^\"]+\"(,\"file\":\"\\*\",\"line\":\\*)?\\})*\\]\\}$"),
+                "The method that made the call first, then outward; a frame without symbols has no file or line.");
+            Assert.That(lines.Single(l => l.Contains("\"key\":\"tests.save/Saved\"")), Does.Not.Contain("\"stack\""), "Information is below the default stack level, error.");
         }
 
         [Test]
@@ -293,6 +308,14 @@ namespace Tutan.Logging.Tests
         /// <summary>The lines of the tests' own events, without the header or what the store said of itself.</summary>
         private static string[] Ours(string[] lines) =>
             lines.Where(line => line.Contains("\"key\":\"tests.") || line.Contains("\"event\":\"tests.")).ToArray();
+
+        /// <summary>Writes an error from a frame whose name a test reads, and a record below the stack level.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void FailFromHere(Log log)
+        {
+            log.Failed(1, new InvalidOperationException("The disk is full."));
+            log.Saved(1, "A.sav");
+        }
 
         private static long Sequence(string line) => long.Parse(Regex.Match(line, "^\\{\"seq\":(\\d+)").Groups[1].Value);
     }

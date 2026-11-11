@@ -57,7 +57,8 @@ Rules hold it like any other category: `unity=warning` keeps only Unity's warnin
 ## Console links
 
 A record reaches the Console only when the drain writes it, so the stack Unity would capture is the drain's.
-The call site travels in the record instead: the generated method takes `[CallerFilePath]` and `[CallerLineNumber]`, two values the compiler writes as constants, so a call still allocates nothing.
+The call site travels in the record instead: the generated method takes `[CallerFilePath]` and `[CallerLineNumber]`, two values the compiler writes as constants, so a call below its stack level still allocates nothing.
+A record at its stack level carries its own stack too (see [Stacks](store-and-rules.md#stacks)), which the row leaves out, as Unity's would be the drain's.
 
 `UnityConsoleSink` ends each row with the call site as a Unity hyperlink:
 

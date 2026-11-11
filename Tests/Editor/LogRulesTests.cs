@@ -8,6 +8,8 @@ namespace Tutan.Logging.Tests
         [TestCase("debug; tests.save=trace; tests.*=warning; tests.save/Saved=off; tests.limits/Hit=10/s")]
         [TestCase("information; *=error,5/s")]
         [TestCase("trace")]
+        [TestCase("debug; stack>=warning; tests.save=trace,stack>=debug; tests.*=stack>=off; tests.limits/Hit=10/s,stack>=critical")]
+        [TestCase("information; stack>=off")]
         public void Rules_read_back_as_the_text_they_were_parsed_from(string text)
         {
             Result<LogRules> rules = LogRules.Parse(text);
@@ -23,6 +25,61 @@ namespace Tutan.Logging.Tests
             LogRules rules = LogRules.Parse("  Info ;tests.save = WARN , 3/s ; ").ValueUnsafe();
 
             Assert.That(rules.ToString(), Is.EqualTo("information; tests.save=warning,3/s"));
+            Assert.That(LogRules.Parse("Stack >= WARN; tests.save = debug , STACK>= info").ValueUnsafe().ToString(),
+                Is.EqualTo("debug; stack>=warning; tests.save=debug,stack>=information"), "With no bare level, the default's least.");
+        }
+
+        [Test]
+        public void Text_with_no_bare_stack_level_carries_a_stack_from_an_error()
+        {
+            LogRules rules = LogRules.Parse("trace").ValueUnsafe();
+
+            Assert.That((rules.StackLevel, LogRules.Default.StackLevel, LogRules.DefaultStackLevel), Is.EqualTo((LogLevel.Error, LogLevel.Error, LogLevel.Error)));
+            Assert.That(rules.StackLevelFor(SaveLog.Events.Saved), Is.EqualTo(LogLevel.Error));
+            Assert.That(rules.ToString(), Is.EqualTo("trace"), "The default stack level is not written.");
+            Assert.That(new LogRules(LogLevel.Debug).StackLevel, Is.EqualTo(LogLevel.Error));
+            Assert.That(new LogRules(LogLevel.Debug, LogLevel.None).ToString(), Is.EqualTo("debug; stack>=off"));
+        }
+
+        [Test]
+        public void Rules_made_in_code_hold_only_levels_that_are_ones()
+        {
+            const LogLevel notOne = (LogLevel)9;
+
+            Assert.That(() => new LogRules(notOne), Throws.TypeOf<System.ArgumentOutOfRangeException>());
+            Assert.That(() => new LogRules(LogLevel.Debug, notOne), Throws.TypeOf<System.ArgumentOutOfRangeException>(), "Its text would not parse back.");
+            Assert.That(() => new LogRules(LogLevel.Debug, new LogRule("tests.save", notOne, F.None)), Throws.TypeOf<System.ArgumentOutOfRangeException>());
+            Assert.That(() => new LogRules(LogLevel.Debug, new LogRule("tests.save", F.None, F.None, notOne)), Throws.TypeOf<System.ArgumentOutOfRangeException>());
+            Assert.That(new LogRules(LogLevel.None, LogLevel.None, new LogRule("tests.save", LogLevel.None, F.None, LogLevel.None)).ToString(),
+                Is.EqualTo("off; stack>=off; tests.save=off,stack>=off"), "None is off, and a stack level of none captures no stack.");
+        }
+
+        [Test]
+        public void The_most_specific_rule_that_says_a_stack_level_says_an_events()
+        {
+            LogRules rules = LogRules.Parse("trace; stack>=warning; tests.save=stack>=debug; tests.save/Saved=information; tests.*=stack>=off; tests.limits/Hit=stack>=trace")
+                .ValueUnsafe();
+
+            Assert.That(rules.StackLevel, Is.EqualTo(LogLevel.Warning));
+            Assert.That(rules.StackLevelFor(SaveLog.Events.Wrote), Is.EqualTo(LogLevel.Debug));
+            Assert.That(rules.StackLevelFor(SaveLog.Events.Saved), Is.EqualTo(LogLevel.Debug), "A rule with only a level keeps the stack level of a less specific one.");
+            Assert.That(rules.LeastFor(SaveLog.Events.Saved), Is.EqualTo(LogLevel.Information));
+            Assert.That(rules.StackLevelFor(FieldLog.Events.Numbers), Is.EqualTo(LogLevel.None));
+            Assert.That(rules.StackLevelFor(LimitLog.Events.Hit), Is.EqualTo(LogLevel.Trace));
+            Assert.That(rules.StackLevelFor(LimitLog.Events.Struck), Is.EqualTo(LogLevel.None));
+            Assert.That(rules.StackLevelFor(UnityLog.Events.Logged), Is.EqualTo(LogLevel.Warning));
+            Assert.That(rules.LeastFor(FieldLog.Events.Numbers), Is.EqualTo(LogLevel.Trace), "A rule with only a stack level keeps the level of a less specific one.");
+        }
+
+        [Test]
+        public void Rules_that_differ_only_in_a_stack_level_differ()
+        {
+            LogRules one = LogRules.Parse("debug; tests.save=stack>=warning").ValueUnsafe();
+
+            Assert.That(LogRules.Parse("debug; tests.save=stack>=warning").ValueUnsafe(), Is.EqualTo(one));
+            Assert.That(LogRules.Parse("debug; tests.save=stack>=error").ValueUnsafe(), Is.Not.EqualTo(one));
+            Assert.That(LogRules.Parse("debug; stack>=off; tests.save=stack>=warning").ValueUnsafe(), Is.Not.EqualTo(one));
+            Assert.That(LogRules.Parse("debug; tests.save=stack>=warning").ValueUnsafe().GetHashCode(), Is.EqualTo(one.GetHashCode()));
         }
 
         [Test]
@@ -43,6 +100,11 @@ namespace Tutan.Logging.Tests
         [TestCase("tests.save=-1/s", LogRulesError.NotALimit)]
         [TestCase("tests.save=1/s,2/s", LogRulesError.NotALimit)]
         [TestCase("debug; trace", LogRulesError.LeastTwice)]
+        [TestCase("stack>=loud", LogRulesError.NotALevel)]
+        [TestCase("stack>=", LogRulesError.NotALevel)]
+        [TestCase("tests.save=stack>=loud", LogRulesError.NotALevel)]
+        [TestCase("stack>=error; stack>=warning", LogRulesError.StackLevelTwice)]
+        [TestCase("tests.save=stack>=error,stack>=warning", LogRulesError.StackLevelTwice)]
         public void Malformed_text_fails_saying_why(string text, LogRulesError why)
         {
             Result<LogRules> rules = LogRules.Parse(text);

@@ -102,6 +102,23 @@ namespace Tutan.Logging
         /// type and message.
         /// </summary>
         public string Text(LogValue value) => value.ToText(Redact);
+
+        /// <summary>
+        /// A stack as a string, a line a frame as <see cref="LogStack.ToString"/> writes it, with
+        /// <c>~</c> for the home folder when the sink leaves it out: for a sink that keeps strings.
+        /// </summary>
+        public string Text(LogStack stack)
+        {
+            if (stack is null)
+                throw new ArgumentNullException(nameof(stack));
+
+            string text = stack.ToString();
+            if ((Redact & LogRedaction.HomeFolder) == 0)
+                return text;
+
+            char[] chars = text.ToCharArray();
+            return new string(chars, 0, LogText.WithoutHome(chars));
+        }
     }
 
     /// <summary>

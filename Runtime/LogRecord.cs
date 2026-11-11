@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using Tutan.Functional;
 
 namespace Tutan.Logging
 {
@@ -77,6 +78,23 @@ namespace Tutan.Logging
         /// by the bridge from Unity's log has none.
         /// </summary>
         public LogCallSite CallSite => new LogCallSite(Entry.CallerFile, Entry.CallerLine);
+
+        /// <summary>
+        /// The stack it was written from, when the store captured one: for a record that has a call site
+        /// and is at or above its event's stack level, as <see cref="LogRules.StackLevelFor"/> says. A scope's
+        /// closing has none, and a record written by the bridge from Unity's log keeps Unity's as a field.
+        /// </summary>
+        public Optional<LogStack> Stack
+        {
+            get
+            {
+                if (!Entry.Stacked)
+                    return F.None;
+
+                ReadOnlySpan<object?> refs = _batch.Refs(_index);
+                return refs.Length > 0 && refs[refs.Length - 1] is LogStack stack ? F.Some(stack) : F.None;
+            }
+        }
 
         /// <summary>Its event or scope.</summary>
         public LogEventSpec Event => _batch.Spec(_index);

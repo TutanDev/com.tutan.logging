@@ -56,6 +56,7 @@ namespace Tutan.Logging
         private EventState[] _events = Array.Empty<EventState>();
         private int[] _perSecond = Array.Empty<int>();
         private byte[] _least = Array.Empty<byte>();
+        private byte[] _stackLevel = Array.Empty<byte>();
         private LogRules _rules;
         private int _conflictsSaid;
 
@@ -262,7 +263,11 @@ namespace Tutan.Logging
             return (uint)spec.Index < (uint)least.Length && level >= least[spec.Index];
         }
 
-        /// <summary>Reserves a record and the slots of its fields, and returns the writer that fills them with the lock held.</summary>
+        /// <summary>
+        /// Reserves a record and the slots of its fields, and returns the writer that fills them with the
+        /// lock held. A record that has a call site and is at or above its event's stack level gets its
+        /// stack, kept after its fields' refs.
+        /// </summary>
         /// <remarks>
         /// Not inlined: every event's generated method calls it, and one copy of the write path is
         /// smaller and faster than a copy in every event.
@@ -288,10 +293,12 @@ namespace Tutan.Logging
             int thread = Environment.CurrentManagedThreadId;
             long under = from.Scope;
             int bits = spec.FixedSlots + chars;
-            int refs = spec.Refs;
             int index = spec.Index;
             if (chars < 0 || bits > Math.Min(_bits.Length / 2, ushort.MaxValue))
                 ThrowTooBig(spec, chars);
+
+            byte[] stackLevel = Volatile.Read(ref _stackLevel);
+            bool stacks = !string.IsNullOrEmpty(callerFile) && (uint)index < (uint)stackLevel.Length && (byte)level >= stackLevel[index];
 
             Monitor.Enter(_lock);
             long timestamp = Now();
@@ -312,6 +319,20 @@ namespace Tutan.Logging
                 state.Suppressed = 0;
             }
 
+            // Walking the stack takes far longer than copying a record, so it is walked with the lock let
+            // go, once the limit has admitted the record, and the time is taken again after, so sequences
+            // stay in the order of time.
+            Optional<LogStack> stack = F.None;
+            if (stacks)
+            {
+                Monitor.Exit(_lock);
+                stack = LogStack.Here();
+                Monitor.Enter(_lock);
+                timestamp = Now();
+            }
+
+            bool stacked = stack.HasValue(out LogStack captured);
+            int refs = spec.Refs + (stacked ? 1 : 0);
             long sequence = _next++;
             Reserve(bits, refs, sequence, out uint bitsAt, out uint refsAt);
             _records[sequence & (_records.Length - 1)] = new LogEntry
@@ -331,15 +352,21 @@ namespace Tutan.Logging
                 Refs = (byte)refs,
                 Level = level,
                 Kind = scope ? LogRecordKind.ScopeBegin : LogRecordKind.Event,
+                Stacked = stacked,
             };
 
             if (scope)
                 _open[sequence] = new OpenScope(spec, level, under, timestamp, callerFile, callerLine);
 
+            // The writer fills the fields' refs, and the stack is the one after them.
+            int refsStart = (int)(refsAt & (uint)(_refs.Length - 1));
+            if (stacked)
+                _refs[refsStart + spec.Refs] = captured;
+
             return new LogWriter(
                 this,
                 _bits.AsSpan((int)(bitsAt & (uint)(_bits.Length - 1)), bits),
-                _refs.AsSpan((int)(refsAt & (uint)(_refs.Length - 1)), refs),
+                _refs.AsSpan(refsStart, spec.Refs),
                 from,
                 scope ? sequence : 0);
         }
@@ -424,6 +451,8 @@ namespace Tutan.Logging
                     Volatile.Write(ref _rules, rules);
                 }
 
+                // Before the least levels, so a call that finds its event on finds its stack level too.
+                Volatile.Write(ref _stackLevel, compiled.StackLevel);
                 Volatile.Write(ref _least, compiled.Least);
             }
 
@@ -610,6 +639,9 @@ namespace Tutan.Logging
 
         // Written as an error's backlog, which a store's record never is: a session's record, as its sink was handed it.
         public bool Backlog;
+
+        // Whether the last of its refs, after its fields', is the LogStack it was written from.
+        public bool Stacked;
     }
 
     /// <summary>A scope that is open: what its closing record needs, and a copy of its opening if the rings overwrote it.</summary>

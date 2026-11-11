@@ -703,7 +703,7 @@ namespace Tutan.Logging
                 _counted[(_countedHead + _countedCount++) & (_counted.Length - 1)] = new Counted(sequence, level, @event, by);
             }
 
-            /// <summary>Folds record <paramref name="index"/> of <paramref name="batch"/> into the last row, if it repeats it: an event of the same event, level, scope and values.</summary>
+            /// <summary>Folds record <paramref name="index"/> of <paramref name="batch"/> into the last row, if it repeats it: an event of the same event, level, scope, values and stack.</summary>
             public bool Repeat(LogBatch batch, int index)
             {
                 if (_count == 0 || _pendingLost > 0 || _last.Count == 0)
@@ -805,12 +805,24 @@ namespace Tutan.Logging
 
                 for (int i = 0; i < a.Length; i++)
                 {
-                    if (!ReferenceEquals(a[i], b[i]) && !(a[i] is string x && b[i] is string y && x == y))
+                    if (!SameRef(a[i], b[i]))
                         return false;
                 }
 
                 return true;
             }
+
+            /// <summary>
+            /// Whether two refs are one: a string and a stack by value, so a repeat is the same message
+            /// reached the same way, and an exception only as itself.
+            /// </summary>
+            private static bool SameRef(object? a, object? b) =>
+                ReferenceEquals(a, b) || a switch
+                {
+                    string x => b is string y && x == y,
+                    LogStack x => x.Equals(b as LogStack),
+                    _ => false,
+                };
 
             /// <summary>A ring twice the size, its items moved to the front in order.</summary>
             private static T[] Grow<T>(T[] ring, int head, int count)

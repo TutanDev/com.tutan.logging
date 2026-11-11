@@ -157,7 +157,7 @@ namespace Tutan.Logging.Editor
     {
         private RecordDetails(long sequence, bool ofFirst, string key, LogLevel level, LogRecordKind kind, DateTimeOffset at, long frame, int thread,
             int records, long suppressed, bool context, string message, ReadOnlyCollection<FieldShown> fields, ReadOnlyCollection<ScopeShown> scopes,
-            Optional<SourcePlace> callSite, Optional<SourcePlace> declaration, ReadOnlyCollection<StackFrame> stack)
+            Optional<SourcePlace> callSite, Optional<SourcePlace> declaration, ReadOnlyCollection<StackFrame> stack, ReadOnlyCollection<StackFrame> thrown)
         {
             Sequence = sequence;
             OfFirst = ofFirst;
@@ -176,6 +176,7 @@ namespace Tutan.Logging.Editor
             CallSite = callSite;
             Declaration = declaration;
             Stack = stack;
+            Thrown = thrown;
         }
 
         /// <summary>The record's sequence: for a scope's opening, the scope's id.</summary>
@@ -230,10 +231,17 @@ namespace Tutan.Logging.Editor
         public Optional<SourcePlace> Declaration { get; }
 
         /// <summary>
-        /// The stack of a message Unity's log handed over, or the frames of the first of the record's
-        /// exceptions that has any: empty for neither, as for an exception made and never thrown.
+        /// The stack the record was written from: the one the store captured, from the method that made
+        /// the call outward, or the one Unity's log handed over with its message. Empty for neither, as
+        /// for a record below its event's stack level.
         /// </summary>
         public ReadOnlyCollection<StackFrame> Stack { get; }
+
+        /// <summary>
+        /// The frames of the first of the record's exceptions that has any: empty for none, as for an
+        /// exception made and never thrown.
+        /// </summary>
+        public ReadOnlyCollection<StackFrame> Thrown { get; }
 
         /// <summary>When it was written, the frame and the thread, as the line under its key: <c>2026-11-04 14:03:12.481  ·  frame 1200  ·  thread 1</c>.</summary>
         public string Stamp
@@ -275,8 +283,8 @@ namespace Tutan.Logging.Editor
         }
 
         /// <summary>
-        /// What opening the row opens: where it was written, or else the first frame of its stack that
-        /// is in the project, or else where its event was declared; none when nothing says.
+        /// What opening the row opens: where it was written, or else the first frame in the project of
+        /// its stack, or else of its exception, or else where its event was declared; none when nothing says.
         /// </summary>
         public Optional<SourcePlace> Opens
         {
@@ -285,8 +293,12 @@ namespace Tutan.Logging.Editor
                 if (CallSite.IsSome)
                     return CallSite;
 
-                Optional<SourcePlace> first = StackFrames.FirstInProject(Stack);
-                return first.IsSome ? first : Declaration;
+                Optional<SourcePlace> written = StackFrames.FirstInProject(Stack);
+                if (written.IsSome)
+                    return written;
+
+                Optional<SourcePlace> thrown = StackFrames.FirstInProject(Thrown);
+                return thrown.IsSome ? thrown : Declaration;
             }
         }
 
@@ -304,7 +316,7 @@ namespace Tutan.Logging.Editor
             other is not null && Sequence == other.Sequence && OfFirst == other.OfFirst && Key == other.Key && Level == other.Level && Kind == other.Kind && At == other.At && Frame == other.Frame
             && Thread == other.Thread && Records == other.Records && Suppressed == other.Suppressed && Context == other.Context
             && Message == other.Message && CallSite == other.CallSite && Declaration == other.Declaration
-            && Fields.SequenceEqual(other.Fields) && Scopes.SequenceEqual(other.Scopes) && Stack.SequenceEqual(other.Stack);
+            && Fields.SequenceEqual(other.Fields) && Scopes.SequenceEqual(other.Scopes) && Stack.SequenceEqual(other.Stack) && Thrown.SequenceEqual(other.Thrown);
 
         /// <inheritdoc />
         public override int GetHashCode() => HashCode.Combine(Key, At, Records, Message);
@@ -327,7 +339,10 @@ namespace Tutan.Logging.Editor
             LogEventSpec spec = record.Event;
             bool logged = StackFrames.HoldsUnityStack(spec);
             var fields = new List<FieldShown>(record.FieldCount);
-            ReadOnlyCollection<StackFrame> stack = Array.AsReadOnly(Array.Empty<StackFrame>());
+            ReadOnlyCollection<StackFrame> stack = record.Stack.HasValue(out LogStack captured)
+                ? StackFrames.Of(captured, paths)
+                : StackFrames.None;
+            ReadOnlyCollection<StackFrame> thrown = StackFrames.None;
             for (int i = 0; i < record.FieldCount; i++)
             {
                 LogValue value = record.Field(i);
@@ -341,8 +356,8 @@ namespace Tutan.Logging.Editor
 
                 // As a sink writes it, with nothing left out: a personal field is shown and marked so.
                 string text = value.ToText(LogRedaction.None);
-                if (stack.Count == 0 && !logged && value.Kind == LogValueKind.Exception && !value.IsNone)
-                    stack = StackFrames.OfException(text, paths);
+                if (thrown.Count == 0 && value.Kind == LogValueKind.Exception && !value.IsNone)
+                    thrown = StackFrames.OfException(text, paths);
 
                 fields.Add(new FieldShown(field.Name, text, field.Kind, field.Personal));
             }
@@ -351,7 +366,7 @@ namespace Tutan.Logging.Editor
             return new RecordDetails(
                 record.Sequence, record.Sequence == row.Sequence, spec.Key, record.Level, record.Kind, clock.At(record.Timestamp), record.Frame, record.Thread, row.Records,
                 row.Suppressed, record.IsBacklog, record.ToString(), Array.AsReadOnly(fields.ToArray()), scopes,
-                SourcePlace.Of(site.File, site.Line, paths), SourcePlace.Of(spec.Source.File, spec.Source.Line, paths), stack);
+                SourcePlace.Of(site.File, site.Line, paths), SourcePlace.Of(spec.Source.File, spec.Source.Line, paths), stack, thrown);
         }
     }
 }

@@ -71,7 +71,7 @@ namespace Tutan.Logging.Editor
         }
 
         private static void DrawNothingFocused(ScrollView details) =>
-            details.Add(Text("Select a row to see its record: its fields, the scopes it is under, where it was written, and the source around it.", "hint"));
+            details.Add(Text("Select a row to see its record: its fields, the scopes it is under, where it was written, the source around it, and an error's stack.", "hint"));
 
         private void DrawRecord(ScrollView details, RecordDetails shown)
         {
@@ -100,7 +100,8 @@ namespace Tutan.Logging.Editor
                 details.Add(Link(declared.ToString(), () => OpenFile(declared), "Opens the file at the event's declaration."));
             }
 
-            DrawStack(details, shown.Stack);
+            DrawStack(details, "Stack", shown.Stack);
+            DrawStack(details, "Thrown at", shown.Thrown);
         }
 
         private static void DrawFields(ScrollView details, ReadOnlyCollection<FieldShown> fields)
@@ -137,12 +138,19 @@ namespace Tutan.Logging.Editor
 
         private void DrawSource(ScrollView details, SourcePlace place)
         {
+            if (SourceAt(place).HasValue(out VisualElement source))
+                details.Add(source);
+        }
+
+        /// <summary>The source lines around <paramref name="place"/>, a press on them opening it: none when the file cannot be read, or is shorter than the line.</summary>
+        private Optional<VisualElement> SourceAt(SourcePlace place)
+        {
             if (!Source(place).HasValue(out string[] lines))
-                return;
+                return F.None;
 
             ReadOnlyCollection<SourceLine> around = SourceLines.Around(lines, place.Line, SourceAround);
             if (around.Count == 0)
-                return;
+                return F.None;
 
             var source = new VisualElement();
             source.AddToClassList("source");
@@ -158,21 +166,103 @@ namespace Tutan.Logging.Editor
                 source.Add(row);
             }
 
-            details.Add(source);
+            return source;
         }
 
-        private static void DrawStack(ScrollView details, ReadOnlyCollection<StackFrame> stack)
+        private void DrawStack(ScrollView details, string title, ReadOnlyCollection<StackFrame> stack)
         {
             if (stack.Count == 0)
                 return;
 
-            details.Add(Text("Stack", "section"));
+            details.Add(Text(title, "section"));
+            var frames = new VisualElement();
+            frames.AddToClassList("stack");
             foreach (StackFrame frame in stack)
+                frames.Add(Frame(frame));
+
+            details.Add(frames);
+        }
+
+        /// <summary>
+        /// A frame of a stack: its method, and its file and line, which open it, when its file is on disk.
+        /// A press on the frame shows the source around its line under it, and a second hides it; the
+        /// source is read on the first press, so a stack reads no file it does not show.
+        /// </summary>
+        private VisualElement Frame(StackFrame frame)
+        {
+            var item = new VisualElement();
+            item.AddToClassList("stack-frame");
+            var line = new VisualElement();
+            line.AddToClassList("frame-line");
+            Label fold = Text("", "fold");
+            line.Add(fold);
+            line.Add(Text(frame.Method, "method"));
+            item.Add(line);
+
+            // The tip names the method whole, which a narrow pane cuts short.
+            if (!frame.At.HasValue(out SourcePlace at))
             {
-                if (frame.At.HasValue(out SourcePlace at))
-                    details.Add(Link($"{frame.Method}  ({at.Short})", () => OpenFile(at), at.ToString()));
-                else
-                    details.Add(Text(frame.Method, "frame"));
+                item.AddToClassList("unplaced");
+                line.tooltip = frame.Method;
+                return item;
+            }
+
+            item.EnableInClassList("outside", !at.InProject);
+            if (!OnDisk(at))
+            {
+                // A frame of a file built elsewhere, or moved since: where it was, and nothing to open.
+                item.AddToClassList("unplaced");
+                line.Add(Text(at.Short, "place"));
+                line.tooltip = $"{frame.Method}\n{at}, which is not on this disk.";
+                return item;
+            }
+
+            item.AddToClassList("placed");
+            Label link = Link(at.Short, () => OpenFile(at), $"Opens {at}.");
+            link.AddToClassList("place");
+            line.Add(link);
+
+            VisualElement? source = null;
+            bool showing = false;
+            void Show(bool on)
+            {
+                showing = on;
+                (fold.text, line.tooltip) = FoldLook(frame.Method, on);
+                if (on && source is null)
+                {
+                    source = SourceAt(at).OrElse(static () => Text("The file cannot be read, or is shorter than this line now.", "hint", "frame-hint"));
+                    item.Add(source);
+                }
+
+                if (source is not null)
+                    source.style.display = on ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            line.RegisterCallback<ClickEvent>(click =>
+            {
+                // The file and line open it, and leave the source as it is.
+                if (!ReferenceEquals(click.target, link))
+                    Show(!showing);
+            });
+
+            Show(false);
+            return item;
+        }
+
+        /// <summary>A placed frame's fold glyph and tip, its source shown or hidden: the tip names the method whole, which a narrow pane cuts short.</summary>
+        private static (string Fold, string Tip) FoldLook(string method, bool showing) =>
+            showing ? ("▾", $"{method}\nHides the source.") : ("▸", $"{method}\nShows the source around this line.");
+
+        /// <summary>Whether the file at <paramref name="place"/> is on disk, so it can be read and opened.</summary>
+        private static bool OnDisk(SourcePlace place)
+        {
+            try
+            {
+                return File.Exists(Physical(place));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return false;
             }
         }
 

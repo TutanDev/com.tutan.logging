@@ -4,6 +4,7 @@ A structured log for Unity 6.
 Records are typed data, not text.
 An event is declared once as a `static partial` method, and a source generator writes the method a program calls.
 An event that is off costs a compare, and one that is on copies its values into fixed rings and allocates nothing.
+An error, or whatever level the rules say, also carries the stack it was written from.
 Records are drained once a frame to the Unity Console, with a link to the line that wrote them, and to a JSON lines file.
 An error brings the records that led to it.
 
@@ -82,7 +83,9 @@ Assert.That(saved.Field("Slot"), Is.EqualTo(3));
 - **Declared events:** a declaration names the event's fields and nothing else.
   The generator writes a `Log` extension method beside it, with the call site the compiler fills in.
 - **No allocation at the call:** values are copied into three fixed rings under a short lock, and strings and exceptions are kept by reference.
+  Only a record at its stack level allocates, for its stack.
 - **Clickable call sites:** a Console row ends with a link to the file and line that wrote it, and double-clicking the row opens it.
+- **Stacks by level:** `stack>=warning` in the rules, `error` by default, has a record at that level carry the stack it was written from, to the file and the log console.
 - **Scopes as values:** `using LogScope s = log.Saving(slot)` returns a `Log` whose records are under the scope.
   There is no ambient state to lose across an `await`.
 - **Rules:** `debug; game.save=trace; ai.*=warning; physics/Contact=10/s` chooses levels and rate limits per category or event, applied at runtime.
@@ -90,7 +93,7 @@ Assert.That(saved.Field("Slot"), Is.EqualTo(3));
 - **Frames:** every record carries `Time.frameCount`, stamped by a pump in the PlayerLoop.
 - **JSON lines file:** one self-describing file per session in `Application.persistentDataPath`, with the oldest pruned.
 - **Views:** a `LogView` reads a live store, or a session's file read back by `LogFile.Read`, as rows a filter query such as `level>=warning game.* Slot:3 /fail(ed|ure)/` keeps, with repeats counted and scopes nested.
-- **The log console:** an editor window, beside Unity's Console, that reads a session's records whole, with a query line, level badges, a category tree, columns each developer shows and sizes, and each record's fields, scopes and source.
+- **The log console:** an editor window, beside Unity's Console, that reads a session's records whole, with a query line, level badges, a category tree, columns each developer shows and sizes, and each record's fields, scopes, source and stack.
 - **Unity's own log:** a bridge brings every `Debug.Log`, warning, error and exception into the store, so they reach the file with their backlog.
 - **No static logger:** a `Log` is a dependency like any other, handed in by the composition root.
 

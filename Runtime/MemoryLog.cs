@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Tutan.Functional;
 
 namespace Tutan.Logging
 {
@@ -132,7 +133,7 @@ namespace Tutan.Logging
 
             var kept = new MemoryRecord(
                 record.Sequence, record.Frame, record.Scope, record.Begin, record.Thread, record.Level, record.Kind,
-                record.Event, record.Suppressed, backlog, record.Elapsed, record.CallSite, context.Text(record), Array.AsReadOnly(fields));
+                record.Event, record.Suppressed, backlog, record.Elapsed, record.CallSite, context.Text(record), Array.AsReadOnly(fields), record.Stack);
 
             lock (_lock)
                 _records.Add(kept);
@@ -200,9 +201,11 @@ namespace Tutan.Logging
     /// <param name="CallSite">The call that wrote it.</param>
     /// <param name="Message">Its message, with the sink's redaction; for a scope's closing, its opening's.</param>
     /// <param name="Fields">Its fields.</param>
+    /// <param name="Stack">The stack it was written from, when it was at its event's stack level.</param>
     public sealed record MemoryRecord(
         long Sequence, long Frame, long Scope, long Begin, int Thread, LogLevel Level, LogRecordKind Kind, LogEventSpec Event,
-        int Suppressed, bool Backlog, TimeSpan Elapsed, LogCallSite CallSite, string Message, IReadOnlyList<MemoryField> Fields)
+        int Suppressed, bool Backlog, TimeSpan Elapsed, LogCallSite CallSite, string Message, IReadOnlyList<MemoryField> Fields,
+        Optional<LogStack> Stack = default)
     {
         /// <summary>The value of the field named <paramref name="name"/>, ignoring case.</summary>
         /// <exception cref="KeyNotFoundException">It has no such field.</exception>

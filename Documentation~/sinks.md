@@ -64,7 +64,7 @@ What the sink leaves out of the fields it writes:
 |---|---|
 | `LogRedaction.None` | Every field as it was logged |
 | `LogRedaction.Personal` | `[personal]` for every field marked `[Personal]`, exceptions included |
-| `LogRedaction.HomeFolder` | `~` for the user's home folder, wherever a string, chars or exception field has it |
+| `LogRedaction.HomeFolder` | `~` for the user's home folder, wherever a string, chars or exception field, a call site's file or a stack's file has it |
 
 The store keeps every value; redaction is per sink.
 A file that leaves the player's machine redacts what a developer's Console does not need to.
@@ -93,6 +93,7 @@ SaveManager.cs:42  frame 1240
 - Records overwritten before the drain read them are a warning row, `1,234 records were overwritten before the Console read them`.
 
 A row is written with `LogOption.NoStacktrace`, since the stack Unity would capture is the drain's, not the call's.
+A record's own stack, when it carries one (see [Stacks](store-and-rules.md#stacks)), is in the file and the log console, and not in the row.
 With `openOnDoubleClick`, in the editor, a row also opens its call site when double-clicked, through an internal Unity method; if a Unity version does not have it, every row is written with the public API and the link still opens the call site.
 
 It skips what `UnityLogBridge` captured from Unity's own log, which the Console already shows, and the bridge skips what this sink writes, so neither feeds the other.
@@ -131,8 +132,11 @@ One JSON object per line, UTF-8 without a byte order mark:
 - **A declaration**, before the first record of each event: its key, an `id` numbered from 1 in each file, `kind`, `lvl` (absent when each call chooses), `template`, `perSecond` when it has one, its `fields`, and its `source`.
   A field has `name`, `kind` and `type`, and `personal`, `tag`, `optional`, `names` (an enum's members) and `flags` when they apply.
   So the file says what its records are without the program that wrote them.
-- **A record**: `seq`, `scope` when under one, `t`, `frame` when stamped, `thread`, `lvl`, `key` and the `id` of its declaration, `msg`, `suppressed` when a limit dropped some, `context` when written as an error's context, `file` and `line` when it has a call site, and its `fields`.
+- **A record**: `seq`, `scope` when under one, `t`, `frame` when stamped, `thread`, `lvl`, `key` and the `id` of its declaration, `msg`, `suppressed` when a limit dropped some, `context` when written as an error's context, `file` and `line` when it has a call site, its `fields`, and its `stack` when it carries one.
   A record names its declaration by `id` as well as its event by `key`, since two assemblies can declare one key.
+- A stack is an array of frames, from the method that made the call outward, each a `method` and, when the build had symbols, a `file` and a `line`:
+  `"stack":[{"method":"Game.SaveManager.Save(int)","file":"C:\\Projects\\MyGame\\Assets\\Game\\SaveManager.cs","line":42},{"method":"Game.Menu.OnSave()","file":"C:\\Projects\\MyGame\\Assets\\Game\\Menu.cs","line":17}]`.
+  A reader older than stacks skips the member, so the format is still 1.
 - A scope's opening has `begin`, its own sequence, and its closing has `end`, the opening's, and `ms`, how long it was open.
 - Numbers and bools are JSON's own, and a number that is not finite is a string.
   An exception is an object of its `type`, `message` and `text`.

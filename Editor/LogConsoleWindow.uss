@@ -14,6 +14,7 @@
     --source-back: rgba(0, 0, 0, 0.06);
     --current-line: rgba(229, 181, 59, 0.28);
     --saved-on: rgba(29, 111, 184, 0.18);
+    --frame-hover: rgba(0, 0, 0, 0.06);
 }
 
 .log-console.dark {
@@ -30,6 +31,7 @@
     --source-back: rgba(0, 0, 0, 0.22);
     --current-line: rgba(229, 181, 59, 0.18);
     --saved-on: rgba(79, 163, 224, 0.25);
+    --frame-hover: rgba(255, 255, 255, 0.06);
 }
 
 /* Toolbar */
@@ -415,8 +417,58 @@
     opacity: 0.75;
 }
 
-.details .frame {
+/* A stack's frames: the method, then its file and line; a press shows the source under it. */
+
+.details .frame-line {
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 1px 0;
+    border-radius: 3px;
+}
+
+.details .stack-frame.placed > .frame-line:hover {
+    background-color: var(--frame-hover);
+}
+
+/* Only the sides are reset, so the glyph keeps a label's padding above it and sits on the method's first line. */
+.details .frame-line > .fold {
+    width: 14px;
+    flex-shrink: 0;
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 0;
+    padding-right: 0;
+    -unity-text-align: upper-center;
     color: var(--secondary);
+}
+
+/* A name with no space to wrap at is cut at the file and line, not drawn under them. */
+.details .frame-line > .method {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+}
+
+.details .frame-line > .place {
+    flex-shrink: 0;
+    margin-left: 12px;
+    margin-right: 2px;
+}
+
+.details .stack-frame.outside > .frame-line > .method,
+.details .stack-frame.unplaced > .frame-line > .method,
+.details .stack-frame.unplaced > .frame-line > .place {
+    color: var(--secondary);
+}
+
+.details .stack-frame > .source,
+.details .stack-frame > .frame-hint {
+    margin-left: 14px;
+}
+
+.details .stack-frame > .frame-hint {
+    margin-top: 2px;
+    margin-bottom: 4px;
 }
 
 .details .source {

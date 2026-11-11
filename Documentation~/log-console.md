@@ -122,6 +122,7 @@ A row whose records the session has let go since, past its cap, is drawn apart, 
 
 A row's call site, double-clicked or with Enter, opens in the IDE at its line.
 A message Unity's log handed over has no call site of its own, so it opens at the first frame of its stack that is in the project, and the Call Site column shows that frame.
+A record with neither a call site nor a stack opens at the first frame in the project its exception was thrown at, and else where its event was declared.
 
 Right-clicking a row shows:
 
@@ -136,6 +137,7 @@ Right-clicking a row shows:
 
 Copying leaves out what a file that leaves the machine would: personal fields and the home folder in paths.
 Copying a row that stands for many records copies every record it stands for.
+Copied as text, a record with a stack is followed by its frames, a line each, as `at Game.SaveManager.Save(int) (at Assets/Game/SaveManager.cs:42)`, and then by its exception.
 
 ## The details
 
@@ -147,7 +149,13 @@ Selecting a row shows its record:
 - **Under:** the scopes it is under, the innermost first, and clicking one shows only that scope's records;
 - **Written at:** the call site, with three lines of source on each side, and clicking either opens it;
 - **Declared at:** where its event was declared;
-- **Stack:** the frames of an exception or of a message Unity's log handed over, each opening where it was.
+- **Stack:** the stack it was written from, for a record at its event's stack level, an error by default (see [Stacks](store-and-rules.md#stacks)), or the stack of a message Unity's log handed over;
+- **Thrown at:** the frames of the first of its exceptions that was thrown.
+
+Each frame is a line of its method, and of its file and line on the right.
+Clicking the file and line opens it, and clicking the rest of the frame shows three lines of source on each side under it, and hides them again.
+A frame outside the project is drawn fainter, and so is a frame with no file, or with a file not on this disk, which has nothing to open.
+Pointing at a frame shows its method whole, where a narrow pane cuts it short.
 
 ## Exporting
 

@@ -132,7 +132,7 @@ namespace Tutan.Logging.Tests
             Assert.That(saved.CallSite.Map(at => at.File).Or(""), Does.EndWith(nameof(RecordDetailsTests) + ".cs"));
             Assert.That(saved.CallSite.Map(at => at.Line).Or(0), Is.EqualTo(written));
             Assert.That(saved.Declaration.Map(at => at.File).Or(""), Does.EndWith("TestEvents.cs"));
-            Assert.That(saved.Stack, Is.Empty);
+            Assert.That((saved.Stack, saved.Thrown), Is.EqualTo((StackFrames.None, StackFrames.None)), "Information is below the default stack level, error.");
             Assert.That(saved.Sequence, Is.EqualTo(view[2].Sequence));
             Assert.That(saved.Opens, Is.EqualTo(saved.CallSite), "Where it was written opens.");
             Assert.That(saved.ScopeToShow, Is.EqualTo(F.Some(2L)), "The innermost scope it is under.");
@@ -176,7 +176,7 @@ namespace Tutan.Logging.Tests
         }
 
         [Test]
-        public void An_exceptions_stack_is_the_details_stack_and_its_field_is_its_whole_text()
+        public void An_errors_stack_is_where_it_was_written_from_and_its_exceptions_frames_where_that_was_thrown()
         {
             LogStore store = Stores.Everything();
             Exception error = Thrown();
@@ -188,11 +188,33 @@ namespace Tutan.Logging.Tests
 
             Assert.That(failed.Fields.Select(field => (field.Name, field.Value)), Is.EqualTo(new[] { ("Slot", "1"), ("Error", error.ToString()) }));
             Assert.That(failed.Fields[1].Kind, Is.EqualTo(LogValueKind.Exception));
-            Assert.That(failed.Stack.Any(frame => frame.Method.Contains(nameof(Thrown))), Is.True, "Its frames, read from its text.");
+            Assert.That(failed.Stack[0].Method, Is.EqualTo(
+                $"{typeof(RecordDetailsTests).FullName}.{nameof(An_errors_stack_is_where_it_was_written_from_and_its_exceptions_frames_where_that_was_thrown)}()"));
+            Assert.That(failed.Stack[0].At, Is.EqualTo(failed.CallSite), "Its first frame is the call site, mapped as Unity opens it.");
+            Assert.That(failed.Thrown.Any(frame => frame.Method.Contains(nameof(Thrown))), Is.True, "Its exception's frames, read from its text.");
+            Assert.That(failed.Opens, Is.EqualTo(failed.CallSite));
         }
 
         [Test]
-        public void The_stack_is_of_the_first_exception_that_has_frames()
+        public void A_captured_stacks_frames_are_mapped_as_unity_opens_them()
+        {
+            var stack = new LogStack(new[]
+            {
+                new LogStackFrame("Game.SaveManager.Save(int)", new LogCallSite("D:\\Game\\Assets\\Game\\SaveManager.cs", 42)),
+                new LogStackFrame("Game.Native.Call()", default),
+                new LogStackFrame("Tool.Run()", new LogCallSite("F:/Other/Tool.cs", 3)),
+            });
+
+            Assert.That(Frames(StackFrames.Of(stack, s_paths)), Is.EqualTo(new[]
+            {
+                ("Game.SaveManager.Save(int)", "Assets/Game/SaveManager.cs:42"),
+                ("Game.Native.Call()", ""),
+                ("Tool.Run()", "F:/Other/Tool.cs:3"),
+            }));
+        }
+
+        [Test]
+        public void Thrown_at_is_of_the_first_exception_that_has_frames()
         {
             LogStore store = Stores.Everything();
             Exception thrown = Thrown();
@@ -201,8 +223,22 @@ namespace Tutan.Logging.Tests
             var view = new LogView(store, LogFilter.All);
             view.Update();
 
-            Assert.That(Details(view, 0).Stack, Is.Empty, "An exception never thrown has no frames.");
-            Assert.That(Details(view, 1).Stack.Any(frame => frame.Method.Contains(nameof(Thrown))), Is.True, "A personal exception's frames are shown too.");
+            Assert.That(Details(view, 0).Thrown, Is.Empty, "An exception never thrown has no frames.");
+            Assert.That(Details(view, 1).Thrown.Any(frame => frame.Method.Contains(nameof(Thrown))), Is.True, "A personal exception's frames are shown too.");
+        }
+
+        [Test]
+        public void A_record_with_no_call_site_and_no_stack_opens_the_first_frame_in_the_project_its_exception_was_thrown_at()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Failed(1, new Framed(), "", 0);
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+
+            RecordDetails failed = Details(view, 0);
+
+            Assert.That((failed.CallSite.IsNone, failed.Stack.Count), Is.EqualTo((true, 0)), "With no call site, no stack is captured.");
+            Assert.That(failed.Opens.Map(at => at.ToString()).Or(""), Is.EqualTo("Assets/Game/Disk.cs:12"), "Not the frame outside the project.");
         }
 
         [Test]
@@ -530,7 +566,7 @@ namespace Tutan.Logging.Tests
         }
 
         [Test]
-        public void Rows_copied_as_text_are_a_line_each_with_an_exception_indented_after()
+        public void Rows_copied_as_text_are_a_line_each_with_a_stack_and_an_exception_indented_after()
         {
             var clock = new TestClock();
             LogStore store = Stores.Everything(clock: clock);
@@ -547,15 +583,20 @@ namespace Tutan.Logging.Tests
 
             view.Write(sink, 0, view.Count);
             string[] lines = sink.Text.Split('\n');
+            string[] stack = lines.Skip(2).TakeWhile(line => line.StartsWith("    at ", StringComparison.Ordinal)).ToArray();
+            string[] after = lines.Skip(2 + stack.Length).ToArray();
 
-            Assert.That(lines.Length, Is.EqualTo(7), sink.Text);
             Assert.That(lines[0], Does.Match("^" + Time + @" INF \[tests\.save\] Saving slot 3$"));
             Assert.That(lines[1], Does.Match("^" + Time + @" ERR \[tests\.save\] Saving slot 3 failed  < Saving slot 3$"), "What it is under.");
-            Assert.That(lines[2], Is.EqualTo("    System.IO.IOException: A.sav is locked."));
-            Assert.That(lines[3], Is.EqualTo("    Try again."));
-            Assert.That(lines[4], Does.Match("^" + Time + @" INF \[tests\.save\] .*: done in 5\.0 ms$"), "The closing says how long the scope took.");
-            Assert.That(lines[5], Does.Match("^" + Time + @" WRN \[tests\.heard\] Heard loud$"));
-            Assert.That(lines[6], Is.Empty, "Each line ends.");
+            Assert.That(stack[0], Does.StartWith(
+                $"    at {typeof(RecordDetailsTests).FullName}.{nameof(Rows_copied_as_text_are_a_line_each_with_a_stack_and_an_exception_indented_after)}() (at "),
+                "The stack it was written from, a frame a line.");
+            Assert.That(after.Length, Is.EqualTo(5), sink.Text);
+            Assert.That(after[0], Is.EqualTo("    System.IO.IOException: A.sav is locked."));
+            Assert.That(after[1], Is.EqualTo("    Try again."));
+            Assert.That(after[2], Does.Match("^" + Time + @" INF \[tests\.save\] .*: done in 5\.0 ms$"), "The closing says how long the scope took.");
+            Assert.That(after[3], Does.Match("^" + Time + @" WRN \[tests\.heard\] Heard loud$"), "Warning is below the default stack level, error.");
+            Assert.That(after[4], Is.Empty, "Each line ends.");
         }
 
         [Test]
@@ -752,6 +793,20 @@ namespace Tutan.Logging.Tests
             frames.Select(frame => (frame.Method, frame.At.Map(at => at.ToString()).Or(""))).ToArray();
 
         private static int Line([CallerLineNumber] int line = 0) => line;
+
+        /// <summary>An exception whose text is what a test reads frames from: one outside the project, then one in it.</summary>
+        private sealed class Framed : Exception
+        {
+            public Framed()
+                : base("The disk is gone.")
+            {
+            }
+
+            public override string ToString() => string.Join("\n",
+                "System.IO.IOException: The disk is gone.",
+                "  at Tool.Run () [0x00000] in F:\\Other\\Tool.cs:3",
+                "  at Game.Disk.Open () [0x0001c] in D:\\Game\\Assets\\Game\\Disk.cs:12");
+        }
 
         private static Exception Thrown()
         {

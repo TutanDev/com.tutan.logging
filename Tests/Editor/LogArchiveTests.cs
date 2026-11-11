@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Tutan.Functional;
 using UnityEngine;
@@ -169,6 +170,74 @@ namespace Tutan.Logging.Tests
             Assert.That(exception.ToString(), Does.Contain(nameof(Thrown)));
             Assert.That(failed.Fields[1].Text, Is.EqualTo("InvalidDataException: No buffer."));
             Assert.That(failed.Message, Is.EqualTo("Saving slot 3 failed"));
+        }
+
+        [Test]
+        public void A_stack_reads_back_as_the_frames_it_was_written_with()
+        {
+            (LogStore store, string[] lines) = Write(writing =>
+            {
+                writing.Log.Failed(3, Thrown());
+                writing.Log.Saved(3, "A.sav");
+            });
+
+            Optional<LogStack>[] written = Ours(Held.Records(store)).Select(record => record.Stack).ToArray();
+            Optional<LogStack>[] read = Ours(Held.Records(Read(lines).Archive)).Select(record => record.Stack).ToArray();
+
+            Assert.That(written.Select(stack => stack.IsSome), Is.EqualTo(new[] { true, false }), "Information is below the default stack level, error.");
+            Assert.That(read, Is.EqualTo(written), "Frame for frame, each with its file and line.");
+        }
+
+        [TestCase("{}")]
+        [TestCase("[]")]
+        [TestCase("[1]")]
+        [TestCase("[{\"method\":\"\"}]")]
+        [TestCase("[{\"file\":\"A.cs\",\"line\":3}]")]
+        [TestCase("[{\"method\":\"Run()\",\"file\":\"A.cs\"}]")]
+        [TestCase("[{\"method\":\"Run()\",\"line\":3}]")]
+        [TestCase("[{\"method\":\"Run()\",\"file\":\"A.cs\",\"line\":0}]")]
+        [TestCase("[{\"method\":\"Run()\",\"file\":3,\"line\":3}]")]
+        public void A_record_whose_stack_is_not_one_is_skipped(string stack)
+        {
+            string[] lines = Write(store => store.Log.Failed(3, Thrown())).Lines;
+            int line = Array.FindIndex(lines, text => text.Contains("\"stack\":["));
+            string[] changed = lines.ToArray();
+            changed[line] = Regex.Replace(lines[line], "\"stack\":\\[.*\\]\\}$", $"\"stack\":{stack}}}");
+
+            LogSessionFile file = Read(changed);
+
+            Assert.That(changed[line], Does.EndWith($"\"stack\":{stack}}}"));
+            Assert.That(file.Skipped, Is.EqualTo(new[] { new LogSkippedLine(line + 1, new LogSkipReason.NotAStamp("stack")) }));
+        }
+
+        [Test]
+        public void A_stack_of_frames_without_files_reads_back()
+        {
+            string[] lines = Write(store => store.Log.Failed(3, Thrown())).Lines;
+            int line = Array.FindIndex(lines, text => text.Contains("\"stack\":["));
+            string[] bare = lines.ToArray();
+            bare[line] = Regex.Replace(lines[line], "\"stack\":\\[.*\\]\\}$", "\"stack\":[{\"method\":\"Run()\"}]}");
+
+            LogStack framed = Ours(Held.Records(Read(bare).Archive)).Single().Stack.ValueUnsafe();
+
+            Assert.That(framed, Is.EqualTo(new LogStack(new[] { new LogStackFrame("Run()", default) })), "A build without symbols writes frames without files.");
+        }
+
+        [Test]
+        public void A_scopes_closing_with_a_stack_is_skipped()
+        {
+            string[] lines = Write(store =>
+            {
+                using LogScope saving = store.Log.Saving(1);
+            }).Lines;
+            int line = Array.FindIndex(lines, text => text.Contains("\"end\":"));
+            string[] changed = lines.ToArray();
+            changed[line] = lines[line].Substring(0, lines[line].Length - 1) + ",\"stack\":[{\"method\":\"Run()\"}]}";
+
+            LogSessionFile file = Read(changed);
+
+            Assert.That(file.Skipped, Is.EqualTo(new[] { new LogSkippedLine(line + 1, new LogSkipReason.NotAStamp("stack")) }),
+                "A stack is captured at a call, and a closing is written by none.");
         }
 
         [Test]
@@ -976,6 +1045,10 @@ namespace Tutan.Logging.Tests
 
         private static Error Refused(string text) =>
             LogFile.Read(new MemoryStream(Encoding.UTF8.GetBytes(text)), "test.jsonl").Match(error => error, _ => throw new InvalidOperationException("It read."));
+
+        /// <summary>The records of the tests' own events, without what the store said of itself.</summary>
+        private static MemoryRecord[] Ours(IEnumerable<MemoryRecord> records) =>
+            records.Where(record => record.Event.Key.StartsWith("tests.", StringComparison.Ordinal)).ToArray();
 
         /// <summary>Every record the store holds, in one batch.</summary>
         private static LogBatch All(LogStore store)

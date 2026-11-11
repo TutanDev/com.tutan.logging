@@ -20,7 +20,9 @@ namespace Tutan.Logging
     /// A scope's opening has <c>begin</c>, its own sequence, and its closing has <c>end</c>, the
     /// opening's, and <c>ms</c>, how long it was open. A record written as an error's context has
     /// <c>"context":true</c>. A record with a call site has <c>file</c> and <c>line</c>, the file as the
-    /// compiler wrote it. Numbers and bools are JSON's own, a number that is not finite is a string, an
+    /// compiler wrote it, and a record with a stack ends with <c>stack</c>, its frames from the call
+    /// outward, as <c>{"method":"Game.SaveManager.Save(int)","file":"...","line":42}</c>, a frame with
+    /// no symbols without <c>file</c> and <c>line</c>. Numbers and bools are JSON's own, a number that is not finite is a string, an
     /// exception is an object of its type, message and text, and every other value is its formatted
     /// text: a value of the program's own type formatted as the first hole that names it formats it,
     /// since a reader has only its text.
@@ -172,6 +174,9 @@ namespace Tutan.Logging
                     WriteField(record.Field(i), spec.Template.FormatOf(i), context.Redact);
                 _json.EndObject();
             }
+
+            if (record.Stack.HasValue(out LogStack stack))
+                WriteStack(stack, context.Redact);
 
             _json.End(_stream);
         }
@@ -347,6 +352,31 @@ namespace Tutan.Logging
                     _json.String(_chars.AsSpan(0, length));
                     return;
             }
+        }
+
+        /// <summary>The stack a record was written from: its frames, each its method, and its file and line when known.</summary>
+        private void WriteStack(LogStack stack, LogRedaction redact)
+        {
+            _json.Name("stack");
+            _json.StartArray();
+            IReadOnlyList<LogStackFrame> frames = stack.Frames;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                LogStackFrame frame = frames[i];
+                _json.StartObject();
+                _json.Name("method");
+                _json.String(frame.Method);
+                if (frame.At.IsKnown)
+                {
+                    WriteText("file", frame.At.File!, redact);
+                    _json.Name("line");
+                    _json.Number(frame.At.Line);
+                }
+
+                _json.EndObject();
+            }
+
+            _json.EndArray();
         }
 
         private void WriteText(string name, string text, LogRedaction redact)

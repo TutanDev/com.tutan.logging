@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using NUnit.Framework;
 using Tutan.Functional;
 
@@ -221,6 +222,146 @@ namespace Tutan.Logging.Tests
             Assert.That(batch[0].Kind, Is.EqualTo(LogRecordKind.ScopeBegin));
             Assert.That(batch[0].Sequence, Is.EqualTo(saving.Id));
             Assert.That(batch[0].Field(0).Read<int>(), Is.EqualTo(7));
+        }
+
+        [Test]
+        public void An_opening_kept_past_the_ring_keeps_its_stack()
+        {
+            using var captured = new Captured("trace; stack>=information", options: new LogStoreOptions(Records: LogStore.MinRecords, Program: "Tests"));
+            using LogScope saving = captured.Log.Saving(7);
+
+            for (int i = 0; i < 40; i++)
+                saving.Log.Step(i);
+
+            var batch = new LogBatch(4);
+            captured.Store.Read(new[] { saving.Id }, batch);
+
+            Assert.That(captured.Store.First, Is.GreaterThan(saving.Id), "The ring has moved past the opening.");
+            Assert.That(batch[0].Stack.Map(stack => stack.Frames[0].Method).Or(""), Is.EqualTo(Called(nameof(An_opening_kept_past_the_ring_keeps_its_stack))));
+        }
+
+        [Test]
+        public void A_record_at_its_stack_level_carries_the_stack_it_was_written_from()
+        {
+            LogStore store = Stores.Everything();
+            store.Log.Failed(1, new InvalidOperationException("The disk is full."));
+            store.Log.Saved(1, "A.sav");
+
+            var batch = new LogBatch();
+            store.Read(store.First, batch);
+            LogRecord failed = batch[0];
+            LogStack stack = failed.Stack.ValueUnsafe();
+
+            Assert.That(stack.Frames[0].Method, Is.EqualTo(Called(nameof(A_record_at_its_stack_level_carries_the_stack_it_was_written_from))),
+                "From the method that made the call: the generated method and the package's own are left out.");
+            Assert.That(stack.Frames[0].At, Is.EqualTo(failed.CallSite), "Its first frame is where the record was written.");
+            Assert.That(stack.Frames.Count, Is.GreaterThan(1), "And outward: the frames of the runner that called the test.");
+            Assert.That(failed.FieldCount, Is.EqualTo(2), "The stack is not a field.");
+            Assert.That(batch[1].Stack.IsNone, Is.True, "Information is below the default stack level, error.");
+        }
+
+        [Test]
+        public void A_wrapper_that_forwards_its_callers_call_site_is_left_out_of_the_stack()
+        {
+            LogStore store = Stores.Everything();
+            FailedFor(store.Log, 1);
+
+            var batch = new LogBatch();
+            store.Read(store.First, batch);
+            LogRecord failed = batch[0];
+            LogStack stack = failed.Stack.ValueUnsafe();
+
+            Assert.That(stack.Frames[0].Method, Is.EqualTo(Called(nameof(A_wrapper_that_forwards_its_callers_call_site_is_left_out_of_the_stack))));
+            Assert.That(stack.Frames[0].At, Is.EqualTo(failed.CallSite));
+        }
+
+        [Test]
+        public void Rules_say_from_which_level_a_record_carries_its_stack()
+        {
+            var store = new LogStore(LogRules.Parse("trace; stack>=off; tests.save=stack>=debug").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
+            store.Log.Step(1);
+            store.Log.Wrote(2);
+            store.Log.Heard(LogLevel.Critical, "loud");
+            using (store.Log.Saving(3))
+            {
+            }
+
+            store.Apply(LogRules.Parse("trace; stack>=critical").ValueUnsafe());
+            store.Log.Heard(LogLevel.Critical, "loud");
+            store.Log.Heard(LogLevel.Error, "less loud");
+
+            var batch = new LogBatch();
+            store.Read(store.First, batch);
+            bool[] stacked = Enumerable.Range(0, batch.Count).Select(i => batch[i].Stack.IsSome).ToArray();
+
+            Assert.That(stacked, Is.EqualTo(new[] { false, true, false, true, false, true, false }),
+                "Trace is below tests.save's stack level, the critical below none is off, a scope's opening carries one and its closing never, and new rules apply.");
+        }
+
+        [Test]
+        public void A_record_with_no_call_site_carries_no_stack()
+        {
+            LogStore store = Stores.Everything();
+
+            // As the bridge writes Unity's messages, which hold their own stack.
+            store.Log.Failed(1, new InvalidOperationException("The disk is full."), "", 0);
+
+            var batch = new LogBatch();
+            store.Read(store.First, batch);
+
+            Assert.That((batch[0].CallSite.IsKnown, batch[0].Stack.IsNone), Is.EqualTo((false, true)));
+        }
+
+        [Test]
+        public void A_stack_is_equal_to_another_of_the_same_frames_and_names_each_frame_on_a_line()
+        {
+            var save = new LogStackFrame("Game.SaveManager.Save(int)", new LogCallSite("Assets/Game/SaveManager.cs", 42));
+            var native = new LogStackFrame("Game.Native.Call()", default);
+            var stack = new LogStack(new[] { save, native });
+
+            Assert.That(stack, Is.EqualTo(new LogStack(new[] { save, native })));
+            Assert.That(stack.GetHashCode(), Is.EqualTo(new LogStack(new[] { save, native }).GetHashCode()));
+            Assert.That(stack, Is.Not.EqualTo(new LogStack(new[] { native, save })));
+            Assert.That(stack, Is.Not.EqualTo(new LogStack(new[] { save })));
+            Assert.That(stack.ToString(), Is.EqualTo("Game.SaveManager.Save(int) (at Assets/Game/SaveManager.cs:42)\nGame.Native.Call()"));
+            Assert.That(() => new LogStackFrame("", default), Throws.ArgumentException);
+            Assert.That(() => new LogStack(new[] { save, default }), Throws.ArgumentException, "A default frame names no method.");
+            Assert.That(() => new LogStack(Array.Empty<LogStackFrame>()), Throws.ArgumentException, "A record without a frame has no stack.");
+            Assert.That(default(LogStackFrame).Method, Is.Empty);
+        }
+
+        [Test]
+        public void A_frame_names_its_method_as_csharp_writes_it()
+        {
+            LogStore store = Stores.Everything();
+            long count = 0;
+            Nested.Fail(store.Log, new[] { "A.sav" }, ref count, out int _);
+
+            var batch = new LogBatch();
+            store.Read(store.First, batch);
+
+            Assert.That(batch[0].Stack.ValueUnsafe().Frames[0].Method,
+                Is.EqualTo($"{typeof(LogStoreTests).FullName}.{nameof(Nested)}.{nameof(Nested.Fail)}(Log, string[], ref long, out int)"),
+                "A nested type after its outer one, a keyword for a built-in type, and how a parameter is passed.");
+        }
+
+        /// <summary>The method a test is, as a frame names it.</summary>
+        private static string Called(string test) => $"{typeof(LogStoreTests).FullName}.{test}()";
+
+        /// <summary>A wrapper of the program's own, which writes for its caller and forwards its caller's call site.</summary>
+        private static void FailedFor(Log log, int slot, [CallerFilePath] string file = "", [CallerLineNumber] int line = 0) =>
+            log.Failed(slot, new InvalidOperationException("The disk is full."), file, line);
+
+        private static class Nested
+        {
+            /// <summary>Writes an error from a frame of its own, whose name is what a test reads.</summary>
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            public static void Fail(Log log, string[] files, ref long count, out int written)
+            {
+                count++;
+                written = files.Length;
+                log.Failed(written, new InvalidOperationException("The disk is full."));
+            }
         }
 
         [Test]

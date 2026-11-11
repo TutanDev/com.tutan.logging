@@ -19,7 +19,7 @@ A store holds three rings of fixed size, allocated once:
 |---|---|---|---|
 | Records | One 72-byte entry per record: its stamps, level, event, scope and call site | 16,384 | 16 (`LogStore.MinRecords`) |
 | Bits | The values copied at the call, in 8-byte slots | 65,536 slots | 32,768 (`LogStore.MinBits`) |
-| Refs | The strings and exceptions kept by reference | 16,384 | 64 (`LogStore.MinRefs`) |
+| Refs | The strings, exceptions and stacks kept by reference | 16,384 | 64 (`LogStore.MinRefs`) |
 
 `LogStoreOptions` sets each size, which is rounded up to a power of two; a size below the least throws `ArgumentOutOfRangeException`.
 The defaults hold about 2 MB: some sixteen thousand records, a few frames' worth of a busy game or minutes of a quiet one.
@@ -30,6 +30,7 @@ The defaults hold about 2 MB: some sixteen thousand records, a few frames' worth
 
 A record is written under a lock, held for the copy of its fields and nothing else: no user code and no allocation run under it.
 The timestamp is taken under the lock too, so sequences are in the order of time.
+A record at its event's stack level walks its stack first, with the lock let go, once a limit has admitted it (see [Stacks](#stacks)).
 
 A writer never waits for a reader.
 When a ring is full the oldest records are overwritten, and since every reader reads by sequence, a reader that fell behind knows how many it lost.
@@ -49,6 +50,8 @@ Every record carries:
 | `Thread` | The managed id of the thread that wrote it |
 | `CallSite` | The file and line of the call, as the compiler filled them in |
 | `Suppressed` | How many records of its event a limit dropped since the last one kept |
+
+A record at its event's stack level also carries `Stack`, the frames it was written from.
 
 `LogPump` calls `store.EnterFrame(Time.frameCount)` at the start of every frame (see [Unity Integration](unity-integration.md)).
 A store that is not pumped can be told its frame by whatever drives it.
@@ -100,20 +103,22 @@ Specs are static, in the catalog, because they describe the code that was compil
 
 ## Rules
 
-`LogRules` say what a store captures: a least level every event is held to, and rules that change it, or limit how often an event is kept, for the events a pattern names.
-A store compiles them with the catalog into one byte per event, which is all a call reads to decide it is off.
+`LogRules` say what a store captures: a least level every event is held to, a level from which a record carries its stack, and rules that change either, or limit how often an event is kept, for the events a pattern names.
+A store compiles them with the catalog into two bytes per event, which is all a call reads to decide it is off, and whether it walks its stack.
 
 ### From text
 
 ```csharp
-Result<LogRules> rules = LogRules.Parse("debug; game.save=trace; ai.*=warning; game.input/Moved=off; physics/Contact=10/s");
+Result<LogRules> rules = LogRules.Parse("debug; stack>=warning; game.save=trace; ai.*=warning,stack>=off; game.input/Moved=off; physics/Contact=10/s");
 ```
 
 Items are separated by `;`, and spaces around them do not matter.
 
 - A bare level is the least.
   There can be one, and text with none keeps the default, `debug`.
-- `pattern=what` is a rule, where what is a level, `off`, a limit as `10/s`, or a level and a limit separated by a comma, as `debug,10/s`.
+- `stack>=level` is the stack level, the least level a record carries its stack from.
+  There can be one, and text with none keeps the default, `error`; `stack>=off` turns stacks off.
+- `pattern=what` is a rule, where what is a level, `off`, a limit as `10/s`, a stack level as `stack>=warning`, or more than one of them separated by commas, as `debug,10/s,stack>=debug`.
 
 Levels are `trace`, `debug`, `information`, `warning`, `error`, `critical` and `off`, ignoring case; `info` and `warn` are read too.
 
@@ -126,28 +131,32 @@ Levels are `trace`, `debug`, `information`, `warning`, `error`, `critical` and `
 
 Where two patterns match an event, the more specific wins: a key beats a category, a category beats every prefix, a longer prefix beats a shorter one, and every prefix beats `*`.
 Of two rules alike, the later wins.
-A level and a limit are resolved apart: a rule with only a limit keeps the level a less specific rule gave, and the other way round.
+A level, a limit and a stack level are resolved apart: a rule with only a limit keeps the level a less specific rule gave, and the other way round.
 
 `Parse` fails with an `Error` whose `Code` is a `LogRulesError`:
 
 | Code | When |
 |---|---|
-| `NotALevel` | A bare item, or what follows `=`, is not a level |
+| `NotALevel` | A bare item, what follows `=`, or what follows `stack>=`, is not a level |
 | `NotAPattern` | A pattern is none of the four kinds |
 | `NotALimit` | A limit is not a whole number a second, or a rule has two |
 | `LeastTwice` | A second bare level |
+| `StackLevelTwice` | A second bare stack level, or a rule with two |
 
 `rules.ToString()` writes the text `Parse` reads back as the same rules.
 
 ### In code
 
 ```csharp
-var rules = new LogRules(LogLevel.Debug,
+var rules = new LogRules(LogLevel.Debug, LogLevel.Warning,
     new LogRule("game.save", LogLevel.Trace, F.None),
-    new LogRule("physics/Contact", F.None, 10));
+    new LogRule("physics/Contact", F.None, 10),
+    new LogRule("ai.*", F.None, F.None, StackLevel: LogLevel.None));
 ```
 
-A `LogRule` is a `Pattern`, an optional `Least` (`LogLevel.None` for off) and an optional `PerSecond`.
+A `LogRule` is a `Pattern`, an optional `Least` (`LogLevel.None` for off), an optional `PerSecond`, and an optional `StackLevel` (`LogLevel.None` for none).
+`new LogRules(least, rules)` keeps the default stack level, `LogRules.DefaultStackLevel`, which is `Error`.
+A level that is none of `Trace` to `None` throws `ArgumentOutOfRangeException`, since its text would not parse back.
 `LogRules.Default` is `debug` and no rules: a store captures what a developer would want when something goes wrong, and the sinks, which write from `Information` by default, write the rest only as an error's context.
 
 ### Rate limits
@@ -155,6 +164,26 @@ A `LogRule` is a `Pattern`, an optional `Least` (`LogLevel.None` for off) and an
 A limit is a bucket per event that holds `PerSecond` records and refills at that rate, starting full.
 A record that finds the bucket empty is dropped and counted, and the next one kept carries the count as `Suppressed`.
 A rule's limit overrides the event's own `PerSecond`, and `0/s` takes the event's limit away.
+
+### Stacks
+
+A record at or above its event's stack level carries the stack it was written from, as Unity's own log does for every line.
+By default that is an error or a critical record: the one a developer reads the stack of, and the one a program writes least often.
+
+```csharp
+store.Apply(LogRules.Parse("debug; stack>=warning; game.save=stack>=debug").ValueUnsafe());
+```
+
+- The stack is a `LogStack`: its `Frames`, from the method that made the call outward, each a `LogStackFrame` of a `Method`, as `Game.SaveManager.Save(int)`, and `At`, the file and line of the call it made.
+- The package's own frames are left out, and so is any method whose first parameter is a `Log` and that takes a `[CallerFilePath]`: the method the generator writes, and a wrapper of the program's own that forwards its caller's call site.
+- A frame has a file and a line where the build has symbols: in the editor and in development builds, and in an IL2CPP build only with line numbers turned on.
+- Only a record with a call site walks its stack, so a message `UnityLogBridge` brought over keeps Unity's own stack, as its `StackTrace` field, and has no second one.
+- A scope's opening at its stack level carries one, and its closing never does.
+- The walk allocates and takes far longer than copying a record, so the store does it with its lock let go, and only once a limit has admitted the record.
+  A program that wants no allocation from its errors writes `stack>=off`.
+
+`record.Stack` is the stack, or none for a record below its level.
+The JSON lines file keeps it, the log console shows it frame by frame, and a row copied as text has it.
 
 ### Changing them at runtime
 
@@ -166,7 +195,7 @@ store.Apply(LogRules.Parse("trace; ai.*=debug").ValueUnsafe());
 It says, as a `log/RuleMatchesNothing` record, each rule whose pattern matches nothing the program declares, which is how a misspelt category is caught.
 `store.Rules` is the rules applied last.
 
-`LeastFor(spec)`, `PerSecondFor(spec)` and `MatchingNothing(specs)` answer what the rules say of an event without a store.
+`LeastFor(spec)`, `StackLevelFor(spec)`, `PerSecondFor(spec)` and `MatchingNothing(specs)` answer what the rules say of an event without a store.
 
 ## What the log says about itself
 

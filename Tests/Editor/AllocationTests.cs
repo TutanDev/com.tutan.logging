@@ -9,7 +9,8 @@ namespace Tutan.Logging.Tests
 {
     /// <summary>
     /// What the decision promises a game's frame: writing a record, opening a scope, and draining
-    /// into a sink that keeps nothing allocate nothing once warm.
+    /// into a sink that keeps nothing allocate nothing once warm. A record at its event's stack level
+    /// walks the stack, which allocates, so the tests that write errors turn stacks off.
     /// </summary>
     public class AllocationTests
     {
@@ -18,7 +19,7 @@ namespace Tutan.Logging.Tests
         [Test]
         public void Writing_an_event_allocates_nothing()
         {
-            var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
+            var store = new LogStore(LogRules.Parse("trace; stack>=off").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
             Log log = store.Log;
             var error = new InvalidOperationException("warm");
             void Write()
@@ -30,6 +31,26 @@ namespace Tutan.Logging.Tests
                 log.Optionals(1, null, F.None, Vector3.one);
                 log.Failed(1, error);
                 log.Heard(LogLevel.Warning, File);
+            }
+
+            Write();
+
+            Assert.That(Write, Is.Not.AllocatingGCMemory());
+        }
+
+        [Test]
+        public void An_event_below_its_stack_level_allocates_nothing()
+        {
+            // The stack level is the default, error, and the failure's is critical: each record is below its own.
+            var store = new LogStore(LogRules.Parse("trace; tests.save/Failed=stack>=critical").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
+            Log log = store.Log;
+            var error = new InvalidOperationException("warm");
+            void Write()
+            {
+                log.Saved(1, File);
+                log.Wrote(2);
+                log.Heard(LogLevel.Warning, File);
+                log.Failed(1, error);
             }
 
             Write();
@@ -91,7 +112,7 @@ namespace Tutan.Logging.Tests
         [Test]
         public void Draining_into_a_sink_that_keeps_nothing_allocates_nothing()
         {
-            var store = new LogStore(LogRules.Parse("trace").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
+            var store = new LogStore(LogRules.Parse("trace; stack>=off").ValueUnsafe(), new LogStoreOptions(Program: "Tests"));
             var sink = new FormattingSink();
             using var drain = new LogDrain(store, (sink, new LogSinkOptions(LogLevel.Information, Backlog: 8)));
             Log log = store.Log;

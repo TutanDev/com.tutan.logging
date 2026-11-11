@@ -33,6 +33,12 @@ First version: a structured log for Unity, ported from the design of FunctionalR
 - **`LogRules`:** a least level, plus rules by `*`, category, `category.*` or key that set a level, `off`, a rate limit (`10/s`) or both.
   `LogRules.Parse` reads them from text and fails with a `LogRulesError` code.
   `LogStore.Apply` swaps them at runtime and says, as a record, any rule that matches no declared event.
+- **Stacks:** a record at or above its event's stack level carries the stack it was written from, as `LogRecord.Stack`, a `LogStack` of `LogStackFrame`s, each a method and the file and line of its call.
+  The level is `stack>=error` by default, set bare or per rule in `LogRules` (`stack>=warning; game.save=stack>=debug`), and `stack>=off` turns stacks off.
+  The store walks the stack with its lock let go, once a rate limit has admitted the record, so only such a record allocates.
+  The package's own frames are left out, and so is a method whose first parameter is a `Log` and that takes a `[CallerFilePath]`, as the generated method and a forwarding wrapper do.
+  The JSON lines file writes a record's stack as `stack`, which `LogFile.Read` reads back, `MemoryRecord.Stack` keeps it, `LogContext.Text(LogStack)` writes it with a sink's redaction, and a view counts two records as repeats only when their stacks are equal.
+  The Unity Console row stays without a stack, as the stack Unity would capture is the drain's.
 - **`LogDrain` and `ILogSink`:** the drain reads the store when pumped and hands records to its sinks in sequence order.
   `LogSinkOptions` sets each sink's least level, its backlog (the latest records below that level sharing an error's scope, written before the error as context) and its redaction (`Personal`, `HomeFolder`).
   A sink that throws is reported once and not written to again.
@@ -87,8 +93,10 @@ First version: a structured log for Unity, ported from the design of FunctionalR
   `LogSessionId` compares, a newer session's above an older's.
 - **The log console** (`Tutan.Logging.Editor`, an editor-only assembly): a window at **Window > General > Log Console**, beside Unity's Console, that reads the sessions of `LogConsole.Sessions` whole and typed.
   Its rows are those a query keeps, as `LogFilter` reads it, with a badge for each level that counts the records the query keeps but for its levels, and a tree of the categories, each with its count; a badge or a category pressed writes the query line.
-  Selecting a row shows its record: its fields, personal ones marked, the scopes it is under, where it was written with the source around that line, where its event was declared, and its stack.
-  A row's call site opens in the IDE on a double-click or Enter, and a message Unity's log handed over opens at the first frame of its stack in the project.
+  Selecting a row shows its record: its fields, personal ones marked, the scopes it is under, where it was written with the source around that line, where its event was declared, the stack it was written from or Unity's, and where its exception was thrown.
+  A stack's frames each open their file and line, and show the source around that line when pressed, with frames outside the project, and frames with no file on this disk, drawn fainter.
+  A row's call site opens in the IDE on a double-click or Enter, and a record with none opens at the first frame in the project of its stack, or else of its exception.
+  Copied as text, a record is followed by its stack's frames.
   Rows are copied as text or JSON lines, and the rows shown exported to a file, with personal fields and the home folder left out unless asked otherwise.
   A scope's row folds, and a scope shown alone keeps only its records.
   A session's file opens as a session of its own, and **Follow** keeps the newest row in sight and shows a live session as it starts.

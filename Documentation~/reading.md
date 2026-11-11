@@ -54,7 +54,7 @@ public readonly record struct LogRow(long Sequence, long Last, int Records, long
 
 A row is a record, or a run of records that repeat one another.
 
-- **A repeat** is a record of the same event, level, scope and values as the row before it, and is counted on that row.
+- **A repeat** is a record of the same event, level, scope and values as the row before it, and of the same stack when it carries one, and is counted on that row.
   `Records` is how many, `Sequence` and `Last` the first and the last, and `Suppressed` adds up what a rate limit dropped among them.
   A run spans records the filter hides between them, but not a loss, and never joins a record written as an error's backlog to one that was not.
 - **A scope's opening** has a row of its own, `LogRowKind.Scope`, and what is under it is drawn under it: `Depth` is how many of the scopes a row is under have rows.
@@ -207,7 +207,8 @@ A line it cannot read is skipped, and the rest is read.
 
 The archive's events are the file's declarations, not the catalog's, so it reads a log whatever program wrote it.
 They are the file's alone: the catalog never holds one, a store's `IsEnabled` says no to one, and writing one throws.
-A record keeps its sequence, its stamps, its call site and its time.
+A record keeps its sequence, its stamps, its call site, its time and its stack, frame for frame.
+A `stack` that is not an array of one frame or more, each with a `method`, and a `file` and a `line` together when it has either, is a stamp no record can have, and so is a stack on a scope's closing.
 A field reads back as the kind it was declared as, but for three the file holds only as text, which read back as strings:
 
 - a `char` or `ReadOnlySpan<char>`,

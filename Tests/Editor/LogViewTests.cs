@@ -98,6 +98,21 @@ namespace Tutan.Logging.Tests
         }
 
         [Test]
+        public void Records_with_stacks_repeat_only_when_written_from_the_same_one()
+        {
+            LogStore store = Stores.Everything();
+            var error = new IOException("No room.");
+            for (int i = 0; i < 2; i++)
+                store.Log.Failed(1, error);
+            store.Log.Failed(1, error);
+            var view = new LogView(store, LogFilter.All);
+            view.Update();
+
+            Assert.That(Rows(view).Select(row => row.Records), Is.EqualTo(new[] { 2, 1 }),
+                "The loop writes its two from one stack, equal frame for frame, and the third is written from another line.");
+        }
+
+        [Test]
         public void A_scopes_records_are_not_repeats()
         {
             LogStore store = Stores.Everything();

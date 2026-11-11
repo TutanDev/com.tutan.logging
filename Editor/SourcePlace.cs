@@ -83,10 +83,29 @@ namespace Tutan.Logging.Editor
     /// <summary>The frames of a stack as Unity and .NET write one, each a line.</summary>
     internal static class StackFrames
     {
-        private static readonly ReadOnlyCollection<StackFrame> s_none = Array.AsReadOnly(Array.Empty<StackFrame>());
-
         // By key, not by spec: a session read from a file has specs of its own.
         private static readonly string s_loggedKey = UnityLog.Events.Logged.Key;
+
+        /// <summary>No frames.</summary>
+        public static ReadOnlyCollection<StackFrame> None { get; } = Array.AsReadOnly(Array.Empty<StackFrame>());
+
+        /// <summary>The frames of a stack a store captured, each file mapped as Unity opens it.</summary>
+        public static ReadOnlyCollection<StackFrame> Of(LogStack stack, UnityPaths paths)
+        {
+            if (stack is null)
+                throw new ArgumentNullException(nameof(stack));
+            if (paths is null)
+                throw new ArgumentNullException(nameof(paths));
+
+            var frames = new StackFrame[stack.Frames.Count];
+            for (int i = 0; i < frames.Length; i++)
+            {
+                LogStackFrame frame = stack.Frames[i];
+                frames[i] = new StackFrame(frame.Method, SourcePlace.Of(frame.At.File, frame.At.Line, paths));
+            }
+
+            return Array.AsReadOnly(frames);
+        }
 
         /// <summary>
         /// Whether a record of <paramref name="spec"/> is a message Unity's log handed over, which has
@@ -147,7 +166,7 @@ namespace Tutan.Logging.Editor
                 frames.Add(Frame(at ? line.Substring(3).TrimStart() : line, paths));
             }
 
-            return frames.Count == 0 ? s_none : Array.AsReadOnly(frames.ToArray());
+            return frames.Count == 0 ? None : Array.AsReadOnly(frames.ToArray());
         }
 
         /// <summary>A line of a stack, without its <c>at</c>, as a frame.</summary>

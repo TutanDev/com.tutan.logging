@@ -398,6 +398,12 @@ namespace Tutan.Logging
                 return;
             }
 
+            if (!TryStack(root, kind, out Optional<LogStack> stack))
+            {
+                Skip(number, new LogSkipReason.NotAStamp("stack"));
+                return;
+            }
+
             if (_archive.Holds(sequence))
             {
                 Skip(number, new LogSkipReason.SequenceTwice(sequence));
@@ -421,6 +427,10 @@ namespace Tutan.Logging
             Stamp(root, "line", 1, int.MaxValue, out long line);
             string? file = Text(root, "file", out string? site) ? site : null;
 
+            // After the fields' refs, as a store keeps it.
+            if (stack.HasValue(out LogStack kept))
+                PutRef(kept);
+
             var entry = new LogEntry
             {
                 Sequence = sequence,
@@ -437,16 +447,50 @@ namespace Tutan.Logging
                 Level = level,
                 Kind = kind,
                 Backlog = Flag(root, "context"),
+                Stacked = stack.IsSome,
             };
 
             _archive.Add(entry, _bits.AsSpan(0, _bitsUsed), _refs.AsSpan(0, _refsUsed));
         }
 
         /// <summary>
+        /// The stack of a record's line, none when it has no <c>stack</c>: false when its <c>stack</c> is
+        /// not one, an array of one frame or more, each an object with its method's text and with a
+        /// file's text and a line from 1, both or neither, or when the record is a scope's closing,
+        /// which never has one.
+        /// </summary>
+        private static bool TryStack(JsonValue root, LogRecordKind kind, out Optional<LogStack> stack)
+        {
+            stack = F.None;
+            if (!root.TryGet("stack", out JsonValue value))
+                return true;
+            if (kind == LogRecordKind.ScopeEnd || value is not JsonValue.Items items || items.All.Count == 0)
+                return false;
+
+            var frames = new LogStackFrame[items.All.Count];
+            for (int i = 0; i < frames.Length; i++)
+            {
+                JsonValue frame = items.All[i];
+                if (frame is not JsonValue.Members || !Text(frame, "method", out string? method) || method.Length == 0)
+                    return false;
+
+                bool placed = frame.TryGet("file", out JsonValue file);
+                if ((placed && file is not JsonValue.Text) || frame.TryGet("line", out _) != placed
+                    || !Stamp(frame, "line", 1, int.MaxValue, out long line))
+                    return false;
+
+                frames[i] = new LogStackFrame(method, new LogCallSite(file is JsonValue.Text text ? text.Value : null, (int)line));
+            }
+
+            stack = F.Some(new LogStack(frames));
+            return true;
+        }
+
+        /// <summary>
         /// The first stamp of a record's line that no record can have, or null: a sequence from 1, a
         /// frame, thread and count from 0, a scope it is under and one it closes that came before it,
         /// an opening's own sequence, how long a scope was open, up to a century, and a call site of a
-        /// file and a line from 1.
+        /// file and a line from 1. <see cref="TryStack"/> holds the stack apart.
         /// </summary>
         private static string? Stamps(JsonValue root, long sequence, LogRecordKind kind)
         {
@@ -470,7 +514,6 @@ namespace Tutan.Logging
                 return "end";
             if (kind == LogRecordKind.ScopeEnd && !Milliseconds(root, out _))
                 return "ms";
-
             return null;
         }
 

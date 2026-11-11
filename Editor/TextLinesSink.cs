@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Text;
+using Tutan.Functional;
 
 namespace Tutan.Logging.Editor
 {
@@ -11,8 +12,14 @@ namespace Tutan.Logging.Editor
     /// <code>
     /// 14:03:12.481 INF [game.save] Saved slot 3  (+2)  &lt; Saving slot 3
     /// </code>
-    /// A record written as an error's context starts with <c>(context)</c>, and an exception follows
-    /// its record whole, each of its lines indented.
+    /// A record written as an error's context starts with <c>(context)</c>. The stack it was written
+    /// from follows it, a frame a line after <c>at</c>, and then an exception whole, each of their lines
+    /// indented.
+    /// <code>
+    /// 14:03:12.512 ERR [game.save] Could not save slot 3: IOException: There is no room on the disk
+    ///     at Game.SaveManager.Save(int) (at Assets/Game/SaveManager.cs:42)
+    ///     at Game.Menu.OnSave() (at Assets/Game/Menu.cs:17)
+    /// </code>
     /// </summary>
     internal sealed class TextLinesSink : ILogSink
     {
@@ -47,6 +54,12 @@ namespace Tutan.Logging.Editor
             if (record.Scope != 0 && context.TryScope(record.Scope, out LogRecord under))
                 _text.Append("  < ").Append(context.Text(under));
             _text.Append('\n');
+
+            if (record.Stack.HasValue(out LogStack stack))
+            {
+                foreach (string line in context.Text(stack).Split('\n'))
+                    _text.Append("    at ").Append(line).Append('\n');
+            }
 
             for (int i = 0; i < record.FieldCount; i++)
             {

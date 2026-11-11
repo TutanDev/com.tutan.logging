@@ -11,6 +11,7 @@ This package keeps records as typed data instead.
 An event is declared once, as a `static partial` method whose parameters are its fields, and a source generator writes the method a program calls.
 An event that is off costs one compare.
 An event that is on copies its values into fixed rings and allocates nothing.
+Only a record at its stack level, an error by default, walks the stack it was written from.
 Formatting waits for a reader: the Unity Console once a frame, a JSON lines file, or a test.
 
 ---
@@ -21,13 +22,14 @@ Formatting waits for a reader: the Unity Console once a frame, a JSON lines file
 |---|---|
 | **Declared events** | `[LogEvent]` on a `static partial void` method; the generator writes a `Log` extension beside it |
 | **Call sites** | Every record carries the file and line that wrote it, and a Console row links to it |
+| **Stacks** | A record at the level the rules say, an error by default, carries the stack it was written from |
 | **Scopes** | A `LogScope` is a value, and what is written through its `Log` is under it |
 | **Rules** | Levels and rate limits per category or event, as data, applied at runtime |
 | **Backlog** | An error brings the records that led to it, marked as context |
 | **Frames** | Every record carries `Time.frameCount` |
 | **Sinks** | The Unity Console, the log console's sessions, a JSON lines file per session, and memory for tests |
 | **Views** | The records a filter query keeps, as rows that count repeats and nest under scopes, from a live store or a session's file |
-| **The log console** | An editor window that reads a session's records whole: a query line, level badges, a category tree, columns, and each record's fields, scopes and source |
+| **The log console** | An editor window that reads a session's records whole: a query line, level badges, a category tree, columns, and each record's fields, scopes, source and stack |
 | **Unity's log** | A bridge brings every `Debug.Log` and exception into the store |
 | **No static logger** | A `Log` is handed in, like any other dependency |
 
