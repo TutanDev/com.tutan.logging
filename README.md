@@ -108,7 +108,8 @@ var drain = new LogDrain(store,
 ```
 
 The window shows a session's records as rows a query keeps, with a badge for each level and a tree of the categories.
-Selecting a row shows its fields, the scopes it is under, where it was written and the source around that line, and double-clicking it opens that line.
+Selecting a row shows its fields, the scopes it is under, where it was written and the source around that line, and its stack.
+Double-clicking a row opens the line that wrote it.
 A session that ended, as when Play Mode exits, stays until the console is cleared, and a session's JSON lines file can be opened and read back.
 The team shares saved filters, category colours and what is always left out, in `ProjectSettings`, and each developer keeps their own columns, Clear on Play and Pause on Error, in `UserSettings`.
 Outside the editor the sink keeps nothing.

@@ -1,7 +1,7 @@
 # The Log Console
 
 The log console is an editor window, beside Unity's Console, that reads a program's records whole and typed.
-It shows the records a query keeps as rows, with a badge for each level, a tree of the categories, and the details of the row selected: its fields, the scopes it is under, where it was written, and the source around that line.
+It shows the records a query keeps as rows, with a badge for each level, a tree of the categories, and the details of the row selected: its fields, the scopes it is under, where it was written, the source around that line, and its stack.
 It reads the sessions a `LogConsoleSink` keeps, and the files a `JsonLinesSink` wrote.
 
 ## Setting it up
